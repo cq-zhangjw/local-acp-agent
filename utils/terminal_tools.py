@@ -11,7 +11,7 @@ Terminal 工具的调用流程（见 docs/terminal-tool-design.md）：
 # key 为 MCP 工具加载后的全名（见 mcp_loader.make_tool: mcp_<server>_<tool>），
 # 或内置工具名。value 支持 format 模板（{result} 为工具返回文本）。
 TERMINAL_TOOLS: dict[str, dict] = {
-    "mcp_calc_server_calculate": {"format": "结果：{result}"},
+    "mcp_calc_server_calculate": {"format": "{result}"},
     # 后续扩展：时间工具、注音工具等（结果短小、确定性的才适合）
 }
 
