@@ -29,6 +29,7 @@ import {
   SearchOutline,
   SparklesOutline,
   GitNetworkOutline,
+  ReaderOutline,
   StopOutline,
   StopCircleOutline,
   TrashOutline,
@@ -287,6 +288,8 @@ const actionLabels = computed(() => ({
   knowledgeVector: locale.value === 'zh' ? '向量' : locale.value === 'ja' ? 'ベクトル' : 'Vector',
   knowledgeNormal: locale.value === 'zh' ? '普通' : locale.value === 'ja' ? '通常' : 'Normal',
   chatMode: locale.value === 'zh' ? 'Chat 聊天' : locale.value === 'ja' ? 'チャット' : 'Chat',
+  historyOn: locale.value === 'zh' ? '历史上下文' : locale.value === 'ja' ? '履歴コンテキスト' : 'History context',
+  historyOff: locale.value === 'zh' ? '单轮问答' : locale.value === 'ja' ? '単発Q&A' : 'Single-turn',
   taskMode: locale.value === 'zh' ? 'Agent 任务' : locale.value === 'ja' ? 'エージェントタスク' : 'Agent task',
   chatModeDesc: locale.value === 'zh' ? '轻量聊天，不加载工具与技能' : locale.value === 'ja' ? 'ツールやスキルなしの軽量チャット' : 'Lightweight chat without tools or skills',
   taskModeDesc: locale.value === 'zh' ? '完整 Agent 工作区，可调用工具与技能' : locale.value === 'ja' ? 'ツールとスキルを使える本格エージェント' : 'Full agent workspace with tools and skills',
@@ -977,6 +980,10 @@ interface ModelEntry {
 
 /** 模型偏好：浏览器存储，新建会话默认取最近一次使用的模型。 */
 const MODEL_STORAGE_KEY = 'chat_model'
+
+/** 历史上下文偏好：浏览器存储（true=携带完整历史；false=每次只带当前这一条消息）。 */
+const HISTORY_STORAGE_KEY = 'chat_history_on'
+const historyOn = ref(localStorage.getItem(HISTORY_STORAGE_KEY) !== 'false') // 默认开（现状行为）
 
 const currentModel = ref('')
 const modelList = ref<ModelEntry[]>([])
@@ -2447,8 +2454,11 @@ async function sendAgentPrompt(
     content.push(...imageBlocks)
     cancelRequested = false // reset the cancel flag for a new run
     // retry re-sends the same user text with _meta.retry so the backend rolls the
-    // checkpoint back by one turn before re-answering (no stitching on the old reply)
-    await callAcp('session/prompt', { sessionId: conversation.agentSessionId ?? conversation.id, prompt: content, _meta: retry ? { retry: true } : {} })
+    // checkpoint back by one turn before re-answering (no stitching on the old reply);
+    // history_on 随每条消息携带（全局偏好，关=后端只播种当前这一条消息）
+    const meta: Record<string, unknown> = { history_on: historyOn.value }
+    if (retry) meta.retry = true
+    await callAcp('session/prompt', { sessionId: conversation.agentSessionId ?? conversation.id, prompt: content, _meta: meta })
     const assistant = reactiveAssistant()
     if (assistant.status !== 'cancelled' && assistant.status !== 'failed' && !cancelRequested) {
       assistant.status = 'completed'
@@ -3758,6 +3768,21 @@ onBeforeUnmount(() => {
                   <NButton quaternary size="small" class="toolbar-pill agent-pill" :aria-label="actionLabels.chatMode" disabled>
                     <template #icon><NIcon :component="SparklesOutline" /></template>{{ actionLabels.chatMode }}
                   </NButton>
+                  <NTooltip>
+                    <template #trigger>
+                      <NButton
+                        quaternary size="small"
+                        class="toolbar-pill"
+                        :class="{ 'toolbar-pill--on': historyOn }"
+                        :aria-label="historyOn ? actionLabels.historyOn : actionLabels.historyOff"
+                        @click="historyOn = !historyOn; localStorage.setItem(HISTORY_STORAGE_KEY, String(historyOn))"
+                      >
+                        <template #icon><NIcon :component="historyOn ? ReaderOutline : TimeOutline" /></template>
+                        {{ historyOn ? actionLabels.historyOn : actionLabels.historyOff }}
+                      </NButton>
+                    </template>
+                    {{ historyOn ? actionLabels.historyOn : actionLabels.historyOff }}
+                  </NTooltip>
                 </template>
               </div>
               <div class="composer-toolbar-right">
@@ -4375,7 +4400,7 @@ onBeforeUnmount(() => {
 .message-actions { display:flex; gap:2px; align-items:center; margin-top:7px; } .message-actions--user { justify-content:flex-end; } .message-menu-wrap { position:relative; display:inline-flex; } .message-menu { position:absolute; right:0; bottom:calc(100% + 6px); z-index:60; display:flex; flex-direction:column; min-width:130px; padding:4px; background:#fff; border:1px solid #e4e8ee; border-radius:8px; box-shadow:0 4px 16px rgba(29,39,51,.12); } .message-menu-item { display:flex; gap:6px; align-items:center; padding:6px 10px; color:#1d2733; background:transparent; border:0; border-radius:6px; cursor:pointer; font-size:13px; } .message-menu-item:hover { background:#f1f4f8; }
 .attachment-list,.pending-attachments { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; } .attachment-chip { display:inline-flex; gap:5px; align-items:center; max-width:220px; padding:4px 8px; overflow:hidden; color:#34527e; background:#fff; border:1px solid #cbd8ed; border-radius:6px; font-size:12px; cursor:pointer; } .attachment-chip .attachment-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .attachment-chip button { flex-shrink:0; } .attachment-chip--image { max-width:260px; } .attachment-preview { width:34px; height:34px; flex:0 0 34px; object-fit:cover; border:1px solid #d8e1ef; border-radius:4px; } .attachment-chip button { padding:0; color:inherit; background:none; border:0; cursor:pointer; font-size:15px; }
 .process-collapse { margin-top:14px; background:var(--surface); border:1px solid var(--border); border-radius:8px; } .process-heading,.tool-heading { display:flex; gap:7px; align-items:center; min-width:0; } .process-heading { color:#405166; font-size:13px; } .process-heading small { color:var(--subtle); font-size:11px; } .plan-list { display:flex; flex-direction:column; gap:7px; padding:2px 0 10px; } .plan-item { display:flex; gap:8px; align-items:center; color:#405166; font-size:13px; } .plan-index { display:grid; place-items:center; width:19px; height:19px; color:#2563eb; background:#eaf1ff; border-radius:50%; font-size:11px; } .plan-item :deep(.n-tag) { margin-left:auto; } .detail-collapse { margin-top:8px; border:1px solid var(--border); border-radius:6px; } .analysis-text { padding:8px 0; color:#405166; line-height:1.65; white-space:pre-wrap; } .tool-heading span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .tool-heading :deep(.n-tag) { margin-left:auto; } .message-status { margin-top:10px; }
-.composer-wrap { flex:0 0 auto; padding:12px 0 20px; background:linear-gradient(0deg, var(--canvas) 82%, rgba(247,248,250,0)); } .task-error { margin-bottom:10px; } .pending-attachments { margin:0 0 8px; } .composer { position:relative; display:flex; flex-direction:column; gap:2px; padding:10px 12px 8px; background:var(--surface); border:1px solid var(--border); border-radius:20px; box-shadow:0 4px 14px rgba(29,39,51,.05); } .composer:focus-within { border-color:var(--border); box-shadow:0 4px 14px rgba(29,39,51,.05); } .composer--dragging { border-color:#2563eb; background:#f5f9ff; box-shadow:0 0 0 3px rgba(37,99,235,.16); } .composer-input :deep(.n-input) { --n-border: transparent; --n-box-shadow: none; --n-box-shadow-focus: none; --n-box-shadow-hover: none; --n-color: transparent; --n-color-focus: transparent; background:transparent !important; box-shadow:none !important; } .composer-input :deep(.n-input__border), .composer-input :deep(.n-input__state-border) { border:0 !important; box-shadow:none !important; display:none; } .composer-input :deep(textarea) { padding-top:8px; padding-bottom:4px; } .composer-toolbar { display:flex; align-items:center; justify-content:space-between; margin-top:2px; } .composer-toolbar-left { display:flex; align-items:center; gap:2px; } .composer-toolbar-right { display:flex; align-items:center; gap:6px; } .toolbar-pill { border-radius:10px; padding:0 10px; } .composer-context { font-size:12px; color:var(--subtle); white-space:nowrap; } .composer-model { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--text); white-space:nowrap; cursor:pointer; padding:3px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); transition:border-color .15s ease, background .15s ease; } .composer-model:hover { border-color:#c3d0f5; background:#f5f7fc; } .model-picker { display:flex; flex-direction:column; gap:2px; min-width:200px; max-height:260px; overflow:auto; padding:4px 2px; } .model-picker-item { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:6px; font-size:12px; color:#374151; cursor:pointer; } .model-picker-item:hover { background:#f1f4f8; } .model-picker-item--active { color:#2563eb; font-weight:600; } .model-picker-check { width:12px; flex:0 0 12px; } .context-tooltip { display:flex; flex-direction:column; gap:8px; align-items:stretch; min-width:190px; padding:4px 2px; } .context-tooltip .ctx-tokens { font-size:12px; line-height:1.4; color:#4b5563; white-space:nowrap; } .context-tooltip .ctx-compact-btn { justify-content:center; width:100%; font-size:12px; } .hidden-input { display:none; } .rename-menu { position:fixed; z-index:70; display:flex; flex-direction:column; min-width:130px; padding:4px; background:#fff; border:1px solid #e4e8ee; border-radius:8px; box-shadow:0 4px 16px rgba(29,39,51,.12); }
+.composer-wrap { flex:0 0 auto; padding:12px 0 20px; background:linear-gradient(0deg, var(--canvas) 82%, rgba(247,248,250,0)); } .task-error { margin-bottom:10px; } .pending-attachments { margin:0 0 8px; } .composer { position:relative; display:flex; flex-direction:column; gap:2px; padding:10px 12px 8px; background:var(--surface); border:1px solid var(--border); border-radius:20px; box-shadow:0 4px 14px rgba(29,39,51,.05); } .composer:focus-within { border-color:var(--border); box-shadow:0 4px 14px rgba(29,39,51,.05); } .composer--dragging { border-color:#2563eb; background:#f5f9ff; box-shadow:0 0 0 3px rgba(37,99,235,.16); } .composer-input :deep(.n-input) { --n-border: transparent; --n-box-shadow: none; --n-box-shadow-focus: none; --n-box-shadow-hover: none; --n-color: transparent; --n-color-focus: transparent; background:transparent !important; box-shadow:none !important; } .composer-input :deep(.n-input__border), .composer-input :deep(.n-input__state-border) { border:0 !important; box-shadow:none !important; display:none; } .composer-input :deep(textarea) { padding-top:8px; padding-bottom:4px; } .composer-toolbar { display:flex; align-items:center; justify-content:space-between; margin-top:2px; } .composer-toolbar-left { display:flex; align-items:center; gap:2px; } .composer-toolbar-right { display:flex; align-items:center; gap:6px; } .toolbar-pill { border-radius:10px; padding:0 10px; } .toolbar-pill--on { border-color:#2563eb; background:#eef4ff; color:#2563eb; } .composer-context { font-size:12px; color:var(--subtle); white-space:nowrap; } .composer-model { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--text); white-space:nowrap; cursor:pointer; padding:3px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); transition:border-color .15s ease, background .15s ease; } .composer-model:hover { border-color:#c3d0f5; background:#f5f7fc; } .model-picker { display:flex; flex-direction:column; gap:2px; min-width:200px; max-height:260px; overflow:auto; padding:4px 2px; } .model-picker-item { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:6px; font-size:12px; color:#374151; cursor:pointer; } .model-picker-item:hover { background:#f1f4f8; } .model-picker-item--active { color:#2563eb; font-weight:600; } .model-picker-check { width:12px; flex:0 0 12px; } .context-tooltip { display:flex; flex-direction:column; gap:8px; align-items:stretch; min-width:190px; padding:4px 2px; } .context-tooltip .ctx-tokens { font-size:12px; line-height:1.4; color:#4b5563; white-space:nowrap; } .context-tooltip .ctx-compact-btn { justify-content:center; width:100%; font-size:12px; } .hidden-input { display:none; } .rename-menu { position:fixed; z-index:70; display:flex; flex-direction:column; min-width:130px; padding:4px; background:#fff; border:1px solid #e4e8ee; border-radius:8px; box-shadow:0 4px 16px rgba(29,39,51,.12); }
 .permission-card { width:min(520px, calc(100vw - 32px)); } .permission-code { max-height:260px; margin:0; padding:10px; overflow:auto; background:#f1f4f8; border:1px solid #e4e8ee; border-radius:6px; font:12px/1.55 "Cascadia Code",Consolas,monospace; } .permission-actions { display:flex; justify-content:flex-end; gap:8px; }
 .hidden-action { display:inline-flex; }
 .agent-pill { max-width:130px; overflow:hidden; text-overflow:ellipsis; }

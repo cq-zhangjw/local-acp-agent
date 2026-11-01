@@ -492,6 +492,15 @@ class RollbackAgentServer(CompactingAgentServer):
         self._agent_session_id = session_id
 
     async def prompt(self, prompt, session_id, message_id=None, **kwargs):
+        # history_on (client-sent _meta.history_on, default True):
+        #   True  ->  re-seed the checkpoint with the full table history (现状);
+        #   False ->  re-seed with an empty list, so the model only sees this
+        #             turn (the current user prompt is appended by
+        #             AgentServerACP.prompt afterwards) — stateless Q&A.
+        #   The context table still accumulates history either way, so replays
+        #   and the frontend display are unaffected.
+        history_on = kwargs.get("history_on", True)
+
         # Retry: drop the last user turn from the context table (the client
         # re-sends the same user text, so the old copy must go).
         if kwargs.get("retry"):
@@ -541,6 +550,10 @@ class RollbackAgentServer(CompactingAgentServer):
             agent = self._checkpointed_agent(session_id)
             config = self._session_config(session_id)
             objs = convert_to_messages(context_messages) if context_messages else []
+            if not history_on:
+                # 历史关闭：模型只见当前这一轮（空播种 + 后续追加本轮 user）。
+                # checkpoint 快照仍是运行时状态，表与前端显示不受影响。
+                objs = []
             await agent.aupdate_state(
                 config,
                 {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *objs]},
@@ -579,6 +592,11 @@ class RollbackAgentServer(CompactingAgentServer):
             state = await agent.aget_state(config)
             values = state.values if hasattr(state, "values") else (state if isinstance(state, dict) else {})
             final_messages = list((values or {}).get("messages", []) or [])
+            if not history_on:
+                # 关历史时 checkpoint 被清空重播，本轮执行后只剩当前轮；
+                # 表必须保留旧历史并追加本轮，否则下次开历史会丢前面所有轮次。
+                pre_objs = convert_to_messages(self._pre_prompt_messages.get(session_id) or [])
+                final_messages = [*pre_objs, *final_messages]
             sc_save_context(session_id, final_messages)
         except Exception:  # noqa: BLE001 - write-back must never break the response
             logger.exception("[session_context] write-back failed")
