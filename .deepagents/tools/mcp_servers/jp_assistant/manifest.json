@@ -1,0 +1,208 @@
+{
+  "environment": {
+    "fastmcp": "4.1.0",
+    "mcp": "2.3.0"
+  },
+  "serverInfo": {
+    "name": "JP Assistant Server",
+    "title": null,
+    "version": "4.1.0",
+    "description": null,
+    "websiteUrl": null,
+    "icons": null
+  },
+  "instructions": null,
+  "capabilities": {},
+  "tools": [
+    {
+      "name": "jp_to_hiragana",
+      "title": "Jp To Hiragana",
+      "description": "Convert Japanese text to hiragana (平仮名).",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Input Japanese text (may contain kanji, katakana, etc.)"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "jp_to_katakana",
+      "title": "Jp To Katakana",
+      "description": "Convert Japanese text to katakana (片仮名).",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Input Japanese text (may contain kanji, hiragana, etc.)"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "jp_analyze_words",
+      "title": "Jp Analyze Words",
+      "description": "Analyze Japanese text and return word details (word -> reading & POS).",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Input Japanese text to analyze"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "jp_mark_ruby",
+      "title": "Jp Mark Ruby",
+      "description": "Add hiragana reading annotations to Japanese text as HTML <ruby> tags.",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Input Japanese text (kanji will be annotated)"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "jp_mark_bracket",
+      "title": "Jp Mark Bracket",
+      "description": "Add hiragana reading annotations to Japanese text as 漢字[かな] brackets.",
+      "inputSchema": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Input Japanese text (kanji will be annotated)"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    }
+  ],
+  "prompts": [],
+  "resources": [],
+  "resourceTemplates": []
+}
