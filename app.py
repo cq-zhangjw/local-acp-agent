@@ -284,6 +284,18 @@ async def get_config():
     }
 
 
+@app.post("/api/jp-mark")
+async def jp_mark(payload: dict):
+    """Annotate Japanese kanji in a text with ruby readings (display layer only).
+
+    Extracts spans that contain kana (平仮名/片仮名) and annotates only those
+    spans with <ruby> tags via the jp_assistant MeCab engine. Non-Japanese
+    parts are HTML-escaped as-is, so the returned HTML is safe to v-html.
+    """
+    from utils.jp_mark import jp_mark_text
+    return jp_mark_text(str(payload.get("text") or ""))
+
+
 # Mount the SPA after API and WebSocket routes so it only handles client asset requests.
 app.mount("/", StaticFiles(directory=str(WEB_DIST_DIR), html=True), name="web-client")
 

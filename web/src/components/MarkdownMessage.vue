@@ -7,7 +7,7 @@ import 'highlight.js/styles/github.css'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 
-const props = defineProps<{ content: string; variant?: 'assistant' | 'user'; linkifyPaths?: boolean }>()
+const props = defineProps<{ content: string; variant?: 'assistant' | 'user'; linkifyPaths?: boolean; html?: string }>()
 const emit = defineEmits<{ (e: 'open-file', path: string): void }>()
 const root = ref<HTMLElement | null>(null)
 const message = useMessage()
@@ -90,7 +90,14 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrSet('rel', 'noopener noreferrer')
   return defaultLinkRender(tokens, idx, options, env, self)
 }
-const safeHtml = computed(() => DOMPurify.sanitize(md.render(resolveAttachments(props.content))))
+// 注音 HTML 优先（后端已转义非日语段，仅 ruby/rt 结构），仍经 DOMPurify 二次消毒；
+// 否则走 markdown 渲染
+const safeHtml = computed(() => {
+  if (props.html && props.html.length > 0) {
+    return DOMPurify.sanitize(props.html)
+  }
+  return DOMPurify.sanitize(md.render(resolveAttachments(props.content)))
+})
 
 // 点击绝对路径链接 → 调用后端 /api/reveal-file，在系统文件管理器中打开
 // （目录直接打开；文件打开所在目录并选中）。静默打开，不弹成功提示。

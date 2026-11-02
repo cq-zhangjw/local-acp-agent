@@ -32,6 +32,7 @@ import {
   ReaderOutline,
   StopOutline,
   StopCircleOutline,
+  TextOutline,
   TrashOutline,
   TimeOutline,
   HelpCircleOutline,
@@ -116,7 +117,7 @@ interface ExecutionProcess {
   toolCalls: ToolCallEntry[]
 }
 
-interface TextSegment { id: string; type: 'text'; text: string }
+interface TextSegment { id: string; type: 'text'; text: string; html?: string }
 interface ThoughtSegment { id: string; type: 'thought'; text: string }
 interface PlanSegment { id: string; type: 'plan' }
 interface ToolSegment { id: string; type: 'tool'; toolId: string }
@@ -289,6 +290,8 @@ const actionLabels = computed(() => ({
   knowledgeNormal: locale.value === 'zh' ? '普通' : locale.value === 'ja' ? '通常' : 'Normal',
   chatMode: locale.value === 'zh' ? 'Chat 聊天' : locale.value === 'ja' ? 'チャット' : 'Chat',
   historyOn: locale.value === 'zh' ? '历史上下文' : locale.value === 'ja' ? '履歴コンテキスト' : 'History context',
+  jpMark: locale.value === 'zh' ? '日语注音' : locale.value === 'ja' ? '日本語ルビ' : 'JP ruby',
+  jpMarkOff: locale.value === 'zh' ? '关闭日语注音' : locale.value === 'ja' ? '日本語ルビをオフ' : 'Turn off JP ruby',
   historyOff: locale.value === 'zh' ? '单轮问答' : locale.value === 'ja' ? '単発Q&A' : 'Single-turn',
   taskMode: locale.value === 'zh' ? 'Agent 任务' : locale.value === 'ja' ? 'エージェントタスク' : 'Agent task',
   chatModeDesc: locale.value === 'zh' ? '轻量聊天，不加载工具与技能' : locale.value === 'ja' ? 'ツールやスキルなしの軽量チャット' : 'Lightweight chat without tools or skills',
@@ -984,6 +987,8 @@ const MODEL_STORAGE_KEY = 'chat_model'
 /** 历史上下文偏好：浏览器存储（true=携带完整历史；false=每次只带当前这一条消息）。 */
 const HISTORY_STORAGE_KEY = 'chat_history_on'
 const historyOn = ref(localStorage.getItem(HISTORY_STORAGE_KEY) !== 'false') // 默认开（现状行为）
+const JP_MARK_STORAGE_KEY = 'chat_jp_mark'
+const jpMarkOn = ref(localStorage.getItem(JP_MARK_STORAGE_KEY) !== 'false') // 默认开（AI 回复日语自动注音）
 
 const currentModel = ref('')
 const modelList = ref<ModelEntry[]>([])
@@ -2038,6 +2043,7 @@ async function saveEditMessage() {
     const textSegment = msg.segments.find((segment) => segment.type === 'text')
     if (textSegment) {
       textSegment.text = text
+      delete textSegment.html // 编辑后回到 markdown 渲染，注音由下一次完成时重新触发
     } else {
       msg.segments.push({ id: createId('seg'), type: 'text', text })
     }
@@ -2465,6 +2471,7 @@ async function sendAgentPrompt(
       assistant.process.completedAt = Date.now()
       if (!assistant.finalText) appendTextSegment(assistant, t('taskComplete'))
       speakReplyIfEnabled(assistant.finalText ?? '')
+      void autoJpMark(assistant)
     }
   } catch (error) {
     // Only downgrade to failed while still pending/streaming; a completion
@@ -2756,6 +2763,37 @@ async function speakMessage(item: { id: string; role: string; text?: string; fin
 function toggleSpeakReply() {
   speakReplyEnabled.value = !speakReplyEnabled.value
   localStorage.setItem('chat_speak_reply', speakReplyEnabled.value ? '1' : '0')
+}
+
+function toggleJpMark() {
+  jpMarkOn.value = !jpMarkOn.value
+  localStorage.setItem(JP_MARK_STORAGE_KEY, String(jpMarkOn.value))
+}
+
+// 日语自动注音（显示层）：回复完成后把日语汉字注音为 <ruby> HTML。
+// 只作用于「本次完成」的回复；历史消息不批量请求。原始 finalText 不变，
+// 复制/编辑/TTS 仍走原文。后端只对含假名的片段注音，非日语部分转义。
+async function autoJpMark(assistant: AssistantMessage) {
+  if (!jpMarkOn.value || !assistant.finalText) return
+  // 快速预筛：无假名直接跳过，避免无谓请求
+  if (!/[\u3040-\u30ff]/.test(assistant.finalText)) return
+  try {
+    const resp = await fetch('/api/jp-mark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: assistant.finalText })
+    })
+    if (!resp.ok) return
+    const data = await resp.json()
+    if (data?.has_jp && typeof data.html === 'string') {
+      const textSegment = assistant.segments.find((segment) => segment.type === 'text')
+      if (textSegment && textSegment.text === assistant.finalText) {
+        textSegment.html = data.html
+      }
+    }
+  } catch {
+    /* silent: 注音失败不影响正常展示 */
+  }
 }
 
 async function cancelTask() {
@@ -3634,7 +3672,7 @@ onBeforeUnmount(() => {
               </div>
               <template v-else>
                 <template v-for="segment in item.segments" :key="segment.id">
-                  <MarkdownMessage v-if="segment.type === 'text' || segment.type === 'thought'" class="assistant-content" :content="segment.text" @open-file="openFilePreview" />
+                  <MarkdownMessage v-if="segment.type === 'text' || segment.type === 'thought'" class="assistant-content" :content="segment.text" :html="segment.type === 'text' ? segment.html : undefined" @open-file="openFilePreview" />
                   <ExecutionProcess v-else-if="segment.type === 'plan'" :process="item.process" :todo-items="currentTodoItems" />
                   <ToolCallCard v-else-if="segment.type === 'tool'" :tool="segmentTool(item, segment)" @open-file="openFilePreview" />
                 </template>
@@ -3782,6 +3820,21 @@ onBeforeUnmount(() => {
                       </NButton>
                     </template>
                     {{ historyOn ? actionLabels.historyOn : actionLabels.historyOff }}
+                  </NTooltip>
+                  <NTooltip>
+                    <template #trigger>
+                      <NButton
+                        quaternary size="small"
+                        class="toolbar-pill"
+                        :class="{ 'toolbar-pill--on': jpMarkOn }"
+                        :aria-label="jpMarkOn ? actionLabels.jpMark : actionLabels.jpMarkOff"
+                        @click="toggleJpMark"
+                      >
+                        <template #icon><NIcon :component="jpMarkOn ? LanguageOutline : TextOutline" /></template>
+                        {{ jpMarkOn ? actionLabels.jpMark : actionLabels.jpMarkOff }}
+                      </NButton>
+                    </template>
+                    {{ jpMarkOn ? actionLabels.jpMark : actionLabels.jpMarkOff }}
                   </NTooltip>
                 </template>
               </div>
