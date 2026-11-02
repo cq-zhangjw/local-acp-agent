@@ -32,7 +32,6 @@ import {
   ReaderOutline,
   StopOutline,
   StopCircleOutline,
-  TextOutline,
   TrashOutline,
   TimeOutline,
   HelpCircleOutline,
@@ -290,8 +289,6 @@ const actionLabels = computed(() => ({
   knowledgeNormal: locale.value === 'zh' ? '普通' : locale.value === 'ja' ? '通常' : 'Normal',
   chatMode: locale.value === 'zh' ? 'Chat 聊天' : locale.value === 'ja' ? 'チャット' : 'Chat',
   historyOn: locale.value === 'zh' ? '历史上下文' : locale.value === 'ja' ? '履歴コンテキスト' : 'History context',
-  jpMark: locale.value === 'zh' ? '日语注音' : locale.value === 'ja' ? '日本語ルビ' : 'JP ruby',
-  jpMarkOff: locale.value === 'zh' ? '关闭日语注音' : locale.value === 'ja' ? '日本語ルビをオフ' : 'Turn off JP ruby',
   historyOff: locale.value === 'zh' ? '单轮问答' : locale.value === 'ja' ? '単発Q&A' : 'Single-turn',
   taskMode: locale.value === 'zh' ? 'Agent 任务' : locale.value === 'ja' ? 'エージェントタスク' : 'Agent task',
   chatModeDesc: locale.value === 'zh' ? '轻量聊天，不加载工具与技能' : locale.value === 'ja' ? 'ツールやスキルなしの軽量チャット' : 'Lightweight chat without tools or skills',
@@ -987,8 +984,7 @@ const MODEL_STORAGE_KEY = 'chat_model'
 /** 历史上下文偏好：浏览器存储（true=携带完整历史；false=每次只带当前这一条消息）。 */
 const HISTORY_STORAGE_KEY = 'chat_history_on'
 const historyOn = ref(localStorage.getItem(HISTORY_STORAGE_KEY) !== 'false') // 默认开（现状行为）
-const JP_MARK_STORAGE_KEY = 'chat_jp_mark'
-const jpMarkOn = ref(localStorage.getItem(JP_MARK_STORAGE_KEY) !== 'false') // 默认开（AI 回复日语自动注音）
+// 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
 const modelList = ref<ModelEntry[]>([])
@@ -2765,16 +2761,11 @@ function toggleSpeakReply() {
   localStorage.setItem('chat_speak_reply', speakReplyEnabled.value ? '1' : '0')
 }
 
-function toggleJpMark() {
-  jpMarkOn.value = !jpMarkOn.value
-  localStorage.setItem(JP_MARK_STORAGE_KEY, String(jpMarkOn.value))
-}
-
 // 日语自动注音（显示层）：回复完成后把日语汉字注音为 <ruby> HTML。
 // 只作用于「本次完成」的回复；历史消息不批量请求。原始 finalText 不变，
 // 复制/编辑/TTS 仍走原文。后端只对含假名的片段注音，非日语部分转义。
 async function autoJpMark(assistant: AssistantMessage) {
-  if (!jpMarkOn.value || !assistant.finalText) return
+  if (!assistant.finalText) return
   // 快速预筛：无假名直接跳过，避免无谓请求
   if (!/[\u3040-\u30ff]/.test(assistant.finalText)) return
   try {
@@ -3820,21 +3811,6 @@ onBeforeUnmount(() => {
                       </NButton>
                     </template>
                     {{ historyOn ? actionLabels.historyOn : actionLabels.historyOff }}
-                  </NTooltip>
-                  <NTooltip>
-                    <template #trigger>
-                      <NButton
-                        quaternary size="small"
-                        class="toolbar-pill"
-                        :class="{ 'toolbar-pill--on': jpMarkOn }"
-                        :aria-label="jpMarkOn ? actionLabels.jpMark : actionLabels.jpMarkOff"
-                        @click="toggleJpMark"
-                      >
-                        <template #icon><NIcon :component="jpMarkOn ? LanguageOutline : TextOutline" /></template>
-                        {{ jpMarkOn ? actionLabels.jpMark : actionLabels.jpMarkOff }}
-                      </NButton>
-                    </template>
-                    {{ jpMarkOn ? actionLabels.jpMark : actionLabels.jpMarkOff }}
                   </NTooltip>
                 </template>
               </div>
