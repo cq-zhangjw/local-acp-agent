@@ -3270,6 +3270,22 @@ function onComposerArrow(event: KeyboardEvent, delta: number) {
 watch(locale, (value) => localStorage.setItem(storageKey, value as SupportedLocale))
 watch(initialMode, (mode) => localStorage.setItem(INITIAL_MODE_STORAGE_KEY, mode))
 
+/** 主页（无会话）模式下同步 agent：Agent 任务 → default，Chat 聊天 → Chat。 */
+function applyHomeAgentForMode(mode: 'chat' | 'task') {
+  const target = mode === 'chat' ? 'Chat' : 'default'
+  if (currentAgentName.value !== target) {
+    currentAgentName.value = target
+    localStorage.setItem(AGENT_STORAGE_KEY, target)
+    resetSocketForAgentChange()
+  }
+}
+
+/** 主页模式 tab 切换：更新模式偏好并同步对应 agent。 */
+function setInitialMode(mode: 'chat' | 'task') {
+  initialMode.value = mode
+  if (noActiveConversation.value) applyHomeAgentForMode(mode)
+}
+
 // 定时任务会话自动刷新：进入 timer-* 会话时每 5s 静默更新履历（不滚动、不重置窗口），切换会话立即停止
 /** 静默刷新会话数据：只替换内存数据，不重置消息窗口、不滚动（避免画面跳动）。 */
 async function refreshTimerSessionQuiet(id: string) {
@@ -3330,6 +3346,9 @@ onMounted(async () => {
   void loadTimers()
   try {
     await loadHistory()
+    // 主页（无会话）按当前模式同步默认 agent：任务→default，聊天→Chat
+    // （在 warmUpAcp 之前，确保预热连接使用正确的 agent）
+    if (noActiveConversation.value) applyHomeAgentForMode(initialMode.value)
     // 不再自动新建会话：初始画面展示会话模式选择，发送消息时按所选模式创建
     void validateStoredSessions()
   } finally {
@@ -3573,10 +3592,10 @@ onBeforeUnmount(() => {
         <section ref="timeline" class="timeline" aria-live="polite" @scroll="onTimelineScroll" @wheel.passive="pauseAutoScrollByUser" @touchmove.passive="pauseAutoScrollByUser">
           <div v-if="noActiveConversation" class="welcome welcome--mode">
             <div class="mode-tabs" role="tablist">
-              <button type="button" class="mode-tab" :class="{ active: initialMode === 'chat' }" role="tab" :aria-selected="initialMode === 'chat'" @click="initialMode = 'chat'">
+              <button type="button" class="mode-tab" :class="{ active: initialMode === 'chat' }" role="tab" :aria-selected="initialMode === 'chat'" @click="setInitialMode('chat')">
                 <NIcon :component="ChatbubbleOutline" />{{ actionLabels.chatMode }}
               </button>
-              <button type="button" class="mode-tab" :class="{ active: initialMode === 'task' }" role="tab" :aria-selected="initialMode === 'task'" @click="initialMode = 'task'">
+              <button type="button" class="mode-tab" :class="{ active: initialMode === 'task' }" role="tab" :aria-selected="initialMode === 'task'" @click="setInitialMode('task')">
                 <NIcon :component="ConstructOutline" />{{ actionLabels.taskMode }}
               </button>
             </div>
