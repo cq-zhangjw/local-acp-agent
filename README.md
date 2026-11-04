@@ -170,6 +170,16 @@ MODEL_NAME=qwen3.8-9b
 TEMPERATURE=0.8
 TOP_P=
 MAX_TOKENS=10240
+
+# [Model API mode] api = use ENDPOINT above (default); local = spawn llama-server
+API_MODE=api
+LOCAL_LLAMA_SERVER=plugins/llama-cpp-cu124/llama-server.exe
+LOCAL_MODEL_FILE=models/Ornith-1.5-9B-uncensored.Q6_K.gguf
+LOCAL_MMPROJ_FILE=models/Ornith-1.5-9B-uncensored.mmproj-Q8_0.gguf
+LOCAL_MODEL_PORT=8088
+LOCAL_MODEL_CTX=262144
+LOCAL_MODEL_NGL=99
+LOCAL_MODEL_START_TIMEOUT=300
 ```
 
 Notes:
@@ -177,6 +187,8 @@ Notes:
 - `API_KEY` is the access key for the model service.
 - `APP_HOST` / `APP_PORT` control FastAPI listening settings.
 - `CONTENT_SIZE` is the context window size (tokens), used by the frontend to show the context usage percentage (served via `/api/config`).
+- `API_MODE` selects where the model comes from: `api` (default) uses `model_config.json` endpoints; `local` spawns `llama-server` (from `plugins/llama-cpp-*/`) with the GGUF files under `models/` on the port `model_config.json` points at, waits for readiness in the background (log: `logs/llama-server.log`), and terminates that process together with the app — including the hard-kill path used by `app.exe` (Windows Job Object, `KILL_ON_JOB_CLOSE`). The model alias advertised by the server is taken from the matching `model_config.json` entry, so the frontend-selected model name resolves. If the port is already serving, the running service is reused; missing files or a failed spawn fall back to `api` mode without blocking startup.
+
 - `UPLOAD_ROOT` is the upload storage root (relative to project root or absolute, defaults to `uploads/`); this directory is ignored by git.
 
 If you are connecting directly to the official OpenAI API, configure those values in the same way according to your environment.

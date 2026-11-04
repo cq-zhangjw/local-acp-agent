@@ -11,6 +11,8 @@ Usage: python gateway.py
 """
 
 import asyncio
+import json
+import logging
 import os
 import subprocess
 import sys
@@ -45,6 +47,248 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # ACP agent subprocess startup command
 AGENT_CMD = [sys.executable, str(BASE_DIR / "acp_agent.py")]
+
+
+# ---------- Local model service (API_MODE=local) ----------
+# With API_MODE=local the gateway spawns llama-server (plugins/llama-cpp-*/)
+# against the GGUF files under models/ and serves the same endpoint that
+# model_config.json points at. The subprocess is terminated with the app.
+_MODEL_LOGGER = logging.getLogger("gateway.local_model")
+LOCAL_MODEL_PROC = None  # asyncio.subprocess.Process | None
+LOCAL_MODEL_READY = False
+_LOCAL_MODEL_LOG_HANDLE = None
+
+
+def _api_mode() -> str:
+    """Model API mode: 'api' (model_config.json endpoint, default) or 'local'."""
+    return (os.getenv("API_MODE", "api") or "api").strip().lower()
+
+
+def _local_model_config() -> dict:
+    return {
+        "server": BASE_DIR / (os.getenv("LOCAL_LLAMA_SERVER") or "plugins/llama-cpp-cu124/llama-server.exe"),
+        "model": BASE_DIR / (os.getenv("LOCAL_MODEL_FILE") or "models/Ornith-1.5-9B-uncensored.Q6_K.gguf"),
+        "mmproj": BASE_DIR / (os.getenv("LOCAL_MMPROJ_FILE") or "models/Ornith-1.5-9B-uncensored.mmproj-Q8_0.gguf"),
+        "port": int(os.getenv("LOCAL_MODEL_PORT") or 8088),
+        "ctx": int(os.getenv("LOCAL_MODEL_CTX") or 262144),
+        "ngl": int(os.getenv("LOCAL_MODEL_NGL") or 99),
+        "timeout": float(os.getenv("LOCAL_MODEL_START_TIMEOUT") or 300),
+    }
+
+
+def _port_open(port: int, timeout: float = 0.5) -> bool:
+    """Whether something already accepts TCP connections on 127.0.0.1:port."""
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+_LOCAL_MODEL_JOB_HANDLE = None
+
+
+def _bind_kill_on_parent_exit(pid: int) -> None:
+    """Bind a child to a Job Object with KILL_ON_JOB_CLOSE (Windows).
+
+    The launcher (app.exe) stops the gateway with Kill(entireProcessTree:true),
+    which never reaches the lifespan finally block. Keeping this job handle
+    open means Windows closes it when this process dies -- even on a hard
+    kill -- and the assigned llama-server dies with it.
+    """
+    global _LOCAL_MODEL_JOB_HANDLE
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _BASIC_LIMIT(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class _EXTENDED_LIMIT(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BASIC_LIMIT),
+                ("IoInfo", _IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        info = _EXTENDED_LIMIT()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+        # 9 = JobObjectExtendedLimitInformation
+        if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            kernel32.CloseHandle(job)
+            return
+        # PROCESS_SET_QUOTA (0x0100) | PROCESS_TERMINATE (0x0001)
+        hproc = kernel32.OpenProcess(0x0101, False, pid)
+        if not hproc:
+            kernel32.CloseHandle(job)
+            return
+        assigned = kernel32.AssignProcessToJobObject(job, hproc)
+        kernel32.CloseHandle(hproc)
+        if not assigned:
+            kernel32.CloseHandle(job)
+            return
+        # Keep the handle open for the life of the gateway.
+        _LOCAL_MODEL_JOB_HANDLE = job
+        _MODEL_LOGGER.info("llama-server bound to job object (killed with the app)")
+    except Exception:  # noqa: BLE001 - hardening only, never fatal
+        _MODEL_LOGGER.debug("job object binding skipped", exc_info=True)
+
+
+async def _wait_local_model_ready(port: int, timeout: float) -> None:
+    """Background probe: log once llama-server accepts connections (or dies)."""
+    import time
+
+    global LOCAL_MODEL_READY
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        proc = LOCAL_MODEL_PROC
+        if proc is not None and proc.returncode is not None:
+            _MODEL_LOGGER.error(
+                "llama-server exited during startup (code %s); see logs/llama-server.log",
+                proc.returncode,
+            )
+            return
+        if await asyncio.to_thread(_port_open, port):
+            LOCAL_MODEL_READY = True
+            _MODEL_LOGGER.info("local model ready on http://127.0.0.1:%s", port)
+            return
+        await asyncio.sleep(2)
+    _MODEL_LOGGER.warning(
+        "local model not ready within %.0fs (it may still be loading)", timeout
+    )
+
+
+def _local_model_alias(port: int) -> str:
+    """Model alias for llama-server --alias.
+
+    Derived from model_config.json: the entry whose endpoint points at our
+    port. Falls back to LOCAL_MODEL_ALIAS so the name the frontend sends
+    matches what the server advertises.
+    """
+    try:
+        entries = json.loads((BASE_DIR / "model_config.json").read_text(encoding="utf-8"))
+        for item in entries:
+            endpoint = str(item.get("endpoint") or "")
+            if endpoint and endpoint.rstrip("/").endswith(f":{port}"):
+                return str(item.get("model_name") or "")
+    except Exception:  # noqa: BLE001 - alias is cosmetic, never fatal
+        pass
+    return (os.getenv("LOCAL_MODEL_ALIAS") or "").strip()
+
+
+async def _start_local_model() -> None:
+    """API_MODE=local: spawn llama-server (no-op for api mode or a live port)."""
+    global LOCAL_MODEL_PROC, _LOCAL_MODEL_LOG_HANDLE
+
+    if _api_mode() != "local":
+        return
+    cfg = _local_model_config()
+    if not cfg["server"].exists() or not cfg["model"].exists():
+        _MODEL_LOGGER.error(
+            "local model files missing (server=%s model=%s); falling back to api mode",
+            cfg["server"],
+            cfg["model"],
+        )
+        return
+    if await asyncio.to_thread(_port_open, cfg["port"]):
+        _MODEL_LOGGER.info(
+            "port %s already serving; reuse the running model service", cfg["port"]
+        )
+        return
+
+    log_dir = BASE_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _LOCAL_MODEL_LOG_HANDLE = (log_dir / "llama-server.log").open(
+        "a", encoding="utf-8", errors="replace"
+    )
+
+    cmd = [str(cfg["server"]), "-m", str(cfg["model"])]
+    if cfg["mmproj"].exists():
+        cmd += ["--mmproj", str(cfg["mmproj"])]
+    cmd += [
+        "-c", str(cfg["ctx"]),
+        "-ngl", str(cfg["ngl"]),
+        "--host", "127.0.0.1",
+        "--port", str(cfg["port"]),
+    ]
+    alias = _local_model_alias(cfg["port"])
+    if alias:
+        # Advertise the same model name model_config.json uses, so the
+        # frontend-selected name resolves inside llama-server.
+        cmd += ["--alias", alias]
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        LOCAL_MODEL_PROC = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cfg["model"].parent),
+            stdout=_LOCAL_MODEL_LOG_HANDLE.fileno(),
+            stderr=_LOCAL_MODEL_LOG_HANDLE.fileno(),
+            creationflags=creationflags,
+        )
+    except Exception:  # noqa: BLE001 - a missing server must not break startup
+        _MODEL_LOGGER.exception("failed to start llama-server")
+        return
+
+    _MODEL_LOGGER.info(
+        "llama-server started (pid %s, port %s, model %s)",
+        LOCAL_MODEL_PROC.pid,
+        cfg["port"],
+        cfg["model"].name,
+    )
+    _bind_kill_on_parent_exit(LOCAL_MODEL_PROC.pid)
+    asyncio.create_task(_wait_local_model_ready(cfg["port"], cfg["timeout"]))
+
+
+async def _stop_local_model() -> None:
+    """Terminate llama-server (and its process tree) when the app shuts down."""
+    global LOCAL_MODEL_PROC, LOCAL_MODEL_READY, _LOCAL_MODEL_LOG_HANDLE
+
+    proc = LOCAL_MODEL_PROC
+    LOCAL_MODEL_PROC = None
+    LOCAL_MODEL_READY = False
+    if proc is not None and proc.returncode is None:
+        _MODEL_LOGGER.info("stopping llama-server (pid %s)", proc.pid)
+        try:
+            await _terminate_process_tree(proc)
+        except Exception:  # noqa: BLE001 - cleanup must never raise
+            pass
+    try:
+        if _LOCAL_MODEL_LOG_HANDLE is not None:
+            _LOCAL_MODEL_LOG_HANDLE.close()
+    except Exception:  # noqa: BLE001
+        pass
+    _LOCAL_MODEL_LOG_HANDLE = None
 
 def _should_open_browser() -> bool:
     """Whether the gateway should pop the default browser on startup.
@@ -85,6 +329,11 @@ async def _app_lifespan(app: FastAPI):
         port = int(os.getenv("APP_PORT") or 8000)
         asyncio.create_task(_open_home_in_default_browser(f"http://{host}:{port}"))
 
+    # Local model service: API_MODE=local spawns llama-server on the endpoint
+    # that model_config.json points at; it is killed with the app on shutdown.
+    # 'api' (default) leaves the external endpoint untouched.
+    await _start_local_model()
+
     # Recover tasks that were left in `running` by a previous process (D10),
     # then start the scheduler loop (skipped when TIMER_ENABLED=false).
     from api import timers_engine
@@ -118,6 +367,12 @@ async def _app_lifespan(app: FastAPI):
             from utils.mcp_loader import close_mcp_clients
 
             close_mcp_clients()
+        except Exception:  # noqa: BLE001 - cleanup must never raise
+            pass
+        # Kill the local llama-server process tree (API_MODE=local) so it never
+        # outlives the app.
+        try:
+            await _stop_local_model()
         except Exception:  # noqa: BLE001 - cleanup must never raise
             pass
 
