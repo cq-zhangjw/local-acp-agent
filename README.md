@@ -188,6 +188,7 @@ Notes:
 - `APP_HOST` / `APP_PORT` control FastAPI listening settings.
 - `CONTENT_SIZE` is the context window size (tokens), used by the frontend to show the context usage percentage (served via `/api/config`).
 - `API_MODE` selects where the model comes from: `api` (default) uses `model_config.json` endpoints; `local` spawns `llama-server` (from `plugins/llama-cpp-*/`) with the GGUF files under `models/` on the port `model_config.json` points at, waits for readiness in the background (log: `logs/llama-server.log`), and terminates that process together with the app — including the hard-kill path used by `app.exe` (Windows Job Object, `KILL_ON_JOB_CLOSE`). The model alias advertised by the server is taken from the matching `model_config.json` entry, so the frontend-selected model name resolves. If the port is already serving, the running service is reused; missing files or a failed spawn fall back to `api` mode without blocking startup.
+- `model_download.ps1` ensures the local GGUF files exist: it checks `LOCAL_MODEL_FILE` / `LOCAL_MMPROJ_FILE`, and when they are missing (or truncated) downloads `Ornith-1.5-9B-Q6_K.gguf` + `mmproj-Ornith-1.5-9B-BF16.gguf` from ModelScope (`pip install modelscope` + `modelscope download ... --local-dir models/`), then points the two `.env` keys at the downloaded files so `API_MODE=local` works out of the box.
 
 - `UPLOAD_ROOT` is the upload storage root (relative to project root or absolute, defaults to `uploads/`); this directory is ignored by git.
 
