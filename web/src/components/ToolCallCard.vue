@@ -121,7 +121,7 @@ function statusText(status: string) {
 .tool-call-collapse { margin-top:10px; background:#fff; border:1px solid #e4e8ee; border-radius:10px; overflow:hidden; }
 .tool-call-collapse :deep(.n-collapse-item__header) { padding:12px 16px; }
 .tool-call-collapse :deep(.n-collapse-item:first-child > .n-collapse-item__header) { padding-top:12px; }
-.tool-call-collapse :deep(.n-collapse-item__content-inner) { padding:0 16px 14px; }
+.tool-call-collapse :deep(.n-collapse-item__content-inner) { padding:0 16px 12px; }
 .tool-heading { flex:1; min-width:0; width:100%; display:flex; gap:8px; align-items:center; }
 .tool-badge { flex:none; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:12px/1.5 "Cascadia Code",Consolas,monospace; color:#2563eb; background:rgba(37,99,235,.08); border:1px solid rgba(37,99,235,.25); border-radius:6px; padding:0 8px; }
 .tool-name { flex:1; min-width:0; max-width:450px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--text); }
@@ -130,9 +130,9 @@ function statusText(status: string) {
 .tool-status--error { color:#d03050; background:rgba(208,48,80,.1); }
 .tool-status--warning { color:#f0a020; background:rgba(240,160,32,.1); }
 .tool-status--info { color:#2080f0; background:rgba(32,128,240,.1); }
-.tool-detail { padding:6px 0 4px; }
-.tool-detail__section { padding:8px 0 4px; }
-.tool-detail__label { font-size:12px; color:#64748b; margin-bottom:4px; }
+.tool-detail { padding:0; }
+.tool-detail__section { padding:2px 0 4px; }
+.tool-detail__label { font-size:12px; color:#64748b; margin:0 0 2px; }
 .tool-detail__section :deep(.markdown-message) { font-size:13px; }
 .tool-detail__section :deep(pre), .tool-detail__section :deep(code) { white-space:pre; }
 .tool-detail__section + .tool-detail__section { border-top:1px dashed #eef0f4; margin-top:8px; padding-top:12px; }
