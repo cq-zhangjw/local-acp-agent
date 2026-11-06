@@ -59,16 +59,21 @@ const outputMarkdown = computed(() => {
   return `\`\`\`json\n${jsonValue(raw)}\n\`\`\``
 })
 
-// MCP / 内置工具把异常当正常 ToolMessage 文本返回（后端目前统一前缀"工具调用失败："，
-// 但普通异常也可能直接以英文类名开头，如 "MCPError: ..." / "Traceback ..."），
-// 后端事件里 status 仍是 completed。这里从返回值文本推断失败，徽标才能正确标红。
-// 不依赖某一种语言：中文前缀 + 英文异常类名都覆盖。
-const FAIL_PREFIX_RE = /^(工具调用失败|MCPError|Error|Exception|Traceback|ConnectionError|TimeoutError|OSError|ValueError|TypeError|RuntimeError)\b/
+// MCP / 内置工具把异常当正常 ToolMessage 文本返回，后端事件里 status 仍是 completed。
+// 这里从返回值文本推断失败，徽标才能正确标红。
+// 不锚定开头、不依赖语言：包含这些错误特征即视为失败（容错 output 前面的空白/BOM）。
+const FAIL_PATTERNS: RegExp[] = [
+  /工具调用失败/,
+  /MCPError\s*[:：]/,
+  /Traceback \(most recent call last\)/,
+  /ModuleNotFoundError\s*:/,
+  /Connection closed/i,
+]
 const effectiveStatus = computed<ToolStatus>(() => {
   if (props.tool.status === 'failed') return 'failed'
-  const out = typeof props.tool.output === 'string' ? props.tool.output.trim() : ''
+  const out = typeof props.tool.output === 'string' ? props.tool.output : ''
   if (!out) return props.tool.status
-  if (FAIL_PREFIX_RE.test(out)) return 'failed'
+  if (FAIL_PATTERNS.some((re) => re.test(out))) return 'failed'
   return props.tool.status
 })
 
