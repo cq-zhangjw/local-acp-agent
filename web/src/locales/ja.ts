@@ -29,7 +29,6 @@ export default {
   analysisStep: '分析ステップ',
   parameters: 'パラメーター',
   output: '出力',
-  callDetails: '呼び出し詳細',
   upload: '添付をアップロード',
   removeAttachment: '添付を削除',
   deleteSession: '会話を削除',

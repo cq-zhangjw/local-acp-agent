@@ -98,8 +98,6 @@ function statusText(status: string) {
 
       <!-- 合并为一个"调用详细"区域：先参数后返回值，不再切换 tab -->
       <div class="tool-detail">
-        <div class="tool-detail__title">{{ t('callDetails') }}</div>
-
         <div class="tool-detail__section">
           <div class="tool-detail__label">{{ t('parameters') }}</div>
           <MarkdownMessage :content="paramsMarkdown" :linkify-paths="false" @open-file="(p) => emit('open-file', p)" />
@@ -128,7 +126,6 @@ function statusText(status: string) {
 .tool-status--warning { color:#f0a020; background:rgba(240,160,32,.1); }
 .tool-status--info { color:#2080f0; background:rgba(32,128,240,.1); }
 .tool-detail { padding:6px 0 4px; }
-.tool-detail__title { font-size:12px; color:#94a3b8; margin:4px 0 8px; letter-spacing:.02em; }
 .tool-detail__section { padding:8px 0 4px; }
 .tool-detail__label { font-size:12px; color:#64748b; margin-bottom:4px; }
 .tool-detail__section :deep(.markdown-message) { font-size:13px; }
