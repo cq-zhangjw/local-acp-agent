@@ -29,6 +29,7 @@ export default {
   analysisStep: 'Analysis step',
   parameters: 'Parameters',
   output: 'Output',
+  callDetails: 'Call details',
   upload: 'Upload attachment',
   removeAttachment: 'Remove attachment',
   deleteSession: 'Delete conversation',

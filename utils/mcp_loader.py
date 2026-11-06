@@ -114,46 +114,96 @@ class ServerHolder:
     def __init__(self, server: str) -> None:
         self.server = server
         self._client: Client | None = None
+        # Human-readable last startup/call failure, captured so tool errors can
+        # tell the user (and the model) WHY a server died (e.g. missing dep),
+        # instead of a bare "Connection closed".
+        self.last_failure: str = ""
         # fastmcp infers a PythonStdioTransport from the entry script Path and
         # launches it with the current interpreter (the project venv).
         self._entry = _server_entry(server)
+
+    def _diagnose_startup(self, original: str) -> str:
+        """Run the entry script once on its own to capture its real stderr.
+
+        A stdio MCP server that crashes on import (missing dependency, bad
+        install, ...) looks like "Connection closed" to the fastmcp client.
+        The actual cause lives in the child stderr, which normally inherits the
+        gateway stderr. Re-running it standalone (stdin EOF => it exits right
+        after importing) captures that cause for the tool error text.
+        """
+        try:
+            import subprocess
+            import sys
+
+            proc = subprocess.run(
+                [sys.executable, str(self._entry)],
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+            stderr = (proc.stderr or "").strip()
+            tail = "\n".join(stderr.splitlines()[-15:]) if stderr else "（无 stderr 输出）"
+            return (
+                f"{original}\n\n"
+                f"[MCP 服务 {self.server} 启动诊断] 进程退出码={proc.returncode}\n"
+                f"启动脚本: {self._entry}\n"
+                f"stderr（末尾 15 行）:\n{tail}"
+            )
+        except Exception as diag_exc:  # noqa: BLE001 - diagnosis is best effort
+            return f"{original}（启动诊断失败：{diag_exc}）"
 
     async def ensure(self) -> Client:
         if self._client is None or not self._client.is_connected:
             # stdio subprocess env: inherit the parent environment but force
             # UTF-8 so non-ASCII payloads never trip the pipe codec.
-            client = Client(
-                PythonStdioTransport(
-                    script_path=self._entry,
-                    env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-                ),
-                name=self.server,
-            )
-            # fastmcp 4.x connects inside its async context manager; enter it
-            # manually so the connection outlives a single call.
-            await client.__aenter__()
+            try:
+                client = Client(
+                    PythonStdioTransport(
+                        script_path=self._entry,
+                        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                    ),
+                    name=self.server,
+                )
+                # fastmcp 4.x connects inside its async context manager; enter it
+                # manually so the connection outlives a single call.
+                await client.__aenter__()
+            except Exception as exc:  # noqa: BLE001
+                # Capture the real crash (missing dep / import error) so the
+                # returned tool error carries something actionable.
+                self.last_failure = self._diagnose_startup(f"{type(exc).__name__}: {exc}")
+                logger.exception("MCP server %s failed to start", self.server)
+                raise
             self._client = client
         return self._client
 
     async def call(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        client = await self.ensure()
-        # Bound the server call: a hung MCP stdio subprocess must not leave the
-        # agent prompt pending forever (which would keep the frontend stop
-        # button active after the user sees no progress).
-        result = await client.call_tool(tool_name, arguments, timeout=_CALL_TIMEOUT_SECONDS)
-        data = getattr(result, "data", None)
-        if data is not None:
-            return str(data)
-        content = getattr(result, "content", None)
-        if content:
-            parts = []
-            for block in content:
-                text = getattr(block, "text", None)
-                if text is not None:
-                    parts.append(str(text))
-            if parts:
-                return "\n".join(parts)
-        return str(result)
+        try:
+            client = await self.ensure()
+            # Bound the server call: a hung MCP stdio subprocess must not leave the
+            # agent prompt pending forever (which would keep the frontend stop
+            # button active after the user sees no progress).
+            result = await client.call_tool(tool_name, arguments, timeout=_CALL_TIMEOUT_SECONDS)
+            data = getattr(result, "data", None)
+            if data is not None:
+                return str(data)
+            content = getattr(result, "content", None)
+            if content:
+                parts = []
+                for block in content:
+                    text = getattr(block, "text", None)
+                    if text is not None:
+                        parts.append(str(text))
+                if parts:
+                    return "\n".join(parts)
+            return str(result)
+        except Exception:
+            # Drop the dead client so the next call re-runs ensure() — which
+            # re-runs the startup diagnosis and captures the real crash reason
+            # (missing dependency, bad install, ...) for the error text.
+            self._client = None
+            raise
 
     async def close(self) -> None:
         if self._client is not None:
@@ -225,7 +275,10 @@ def make_tool(holder: ServerHolder, meta: dict[str, Any]) -> StructuredTool:
         try:
             return await holder.call(meta["name"], payload)
         except Exception as exc:  # noqa: BLE001 - return error text instead of aborting the run
-            return f"工具调用失败：{type(exc).__name__}: {exc}"
+            # Prefer the captured startup diagnosis (real cause, e.g. missing
+            # dependency) over a bare "Connection closed".
+            detail = holder.last_failure or f"{type(exc).__name__}: {exc}"
+            return f"工具调用失败：{detail}"
 
     return StructuredTool.from_function(
         coroutine=_run,

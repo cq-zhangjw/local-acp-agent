@@ -29,6 +29,7 @@ export default {
   analysisStep: '分析步骤',
   parameters: '参数',
   output: '返回值',
+  callDetails: '调用详细',
   upload: '上传附件',
   removeAttachment: '移除附件',
   deleteSession: '删除会话',

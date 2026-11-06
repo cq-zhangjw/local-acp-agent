@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NCollapse, NCollapseItem, NTabs, NTabPane } from 'naive-ui'
+import { NCollapse, NCollapseItem } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import MarkdownMessage from './MarkdownMessage.vue'
 
@@ -59,6 +59,15 @@ const outputMarkdown = computed(() => {
   return `\`\`\`json\n${jsonValue(raw)}\n\`\`\``
 })
 
+// MCP / 内置工具把异常当正常 ToolMessage 文本返回（"工具调用失败：..."），后端事件里
+// status 仍是 completed。这里从返回值文本推断失败，徽标才能正确标红。
+const effectiveStatus = computed<ToolStatus>(() => {
+  const out = props.tool.output
+  if (typeof out === 'string' && out.startsWith('工具调用失败')) return 'failed'
+  if (props.tool.status === 'failed') return 'failed'
+  return props.tool.status
+})
+
 // 状态标签用自绘 span（不用 NTag：inline-flex + flex:auto 在折叠头 flex 容器里易参与挤压）
 function statusClass(status: ToolStatus) {
   if (status === 'completed') return 'tool-status--success'
@@ -79,17 +88,24 @@ function statusText(status: string) {
         <div class="tool-heading">
           <code class="tool-badge">{{ display.badge }}</code>
           <span v-if="display.body" class="tool-name" :title="tool.title || display.body">{{ display.body }}</span>
-          <span class="tool-status" :class="statusClass(tool.status)">{{ statusText(tool.status) }}</span>
+          <span class="tool-status" :class="statusClass(effectiveStatus)">{{ statusText(effectiveStatus) }}</span>
         </div>
       </template>
-      <NTabs type="line" size="small" class="tool-tabs">
-        <NTabPane name="input" :tab="t('parameters')">
-          <div class="tool-pane tool-pane--params"><MarkdownMessage :content="paramsMarkdown" :linkify-paths="false" @open-file="(p) => emit('open-file', p)" /></div>
-        </NTabPane>
-        <NTabPane name="output" :tab="t('output')">
-          <div class="tool-pane tool-pane--output"><MarkdownMessage :content="outputMarkdown" :linkify-paths="false" @open-file="(p) => emit('open-file', p)" /></div>
-        </NTabPane>
-      </NTabs>
+
+      <!-- 合并为一个"调用详细"区域：先参数后返回值，不再切换 tab -->
+      <div class="tool-detail">
+        <div class="tool-detail__title">{{ t('callDetails') }}</div>
+
+        <div class="tool-detail__section">
+          <div class="tool-detail__label">{{ t('parameters') }}</div>
+          <MarkdownMessage :content="paramsMarkdown" :linkify-paths="false" @open-file="(p) => emit('open-file', p)" />
+        </div>
+
+        <div class="tool-detail__section">
+          <div class="tool-detail__label">{{ t('output') }}</div>
+          <MarkdownMessage :content="outputMarkdown" :linkify-paths="false" @open-file="(p) => emit('open-file', p)" />
+        </div>
+      </div>
     </NCollapseItem>
   </NCollapse>
 </template>
@@ -107,11 +123,12 @@ function statusText(status: string) {
 .tool-status--error { color:#d03050; background:rgba(208,48,80,.1); }
 .tool-status--warning { color:#f0a020; background:rgba(240,160,32,.1); }
 .tool-status--info { color:#2080f0; background:rgba(32,128,240,.1); }
-.tool-tabs :deep(.n-tabs-nav) { padding:0; }
-.tool-tabs :deep(.n-tabs-tab) { padding:5px 12px 7px; }
-.tool-pane { padding:12px 0 4px; white-space:pre-wrap; overflow-wrap:anywhere; }
-.tool-pane :deep(pre), .tool-pane :deep(code) { white-space:pre; }
-.tool-pane--params :deep(.markdown-message) { font-size:13px; }
-.tool-pane--output { max-height:300px; overflow-y:auto; }
-.tool-pane--output :deep(.markdown-message) { font-size:13px; }
+.tool-detail { padding:6px 0 4px; }
+.tool-detail__title { font-size:12px; color:#94a3b8; margin:4px 0 8px; letter-spacing:.02em; }
+.tool-detail__section { padding:8px 0 4px; }
+.tool-detail__label { font-size:12px; color:#64748b; margin-bottom:4px; }
+.tool-detail__section :deep(.markdown-message) { font-size:13px; }
+.tool-detail__section :deep(pre), .tool-detail__section :deep(code) { white-space:pre; }
+.tool-detail__section + .tool-detail__section { border-top:1px dashed #eef0f4; margin-top:8px; padding-top:12px; }
+.tool-detail__section:last-child { max-height:340px; overflow-y:auto; }
 </style>
