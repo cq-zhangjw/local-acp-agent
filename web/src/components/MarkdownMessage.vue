@@ -102,16 +102,25 @@ const safeHtml = computed(() => {
 // 点击绝对路径链接 → 调用后端 /api/reveal-file，在系统文件管理器中打开
 // （目录直接打开；文件打开所在目录并选中）。静默打开，不弹成功提示。
 function onRootClick(e: MouseEvent) {
-  const target = (e.target as HTMLElement).closest?.('a[data-file-path]')
-  if (target) {
+  const fileTarget = (e.target as HTMLElement).closest?.('a[data-file-path]')
+  if (fileTarget) {
     e.preventDefault()
-    const path = target.getAttribute('data-file-path') || ''
+    const path = fileTarget.getAttribute('data-file-path') || ''
     if (!path) return
     fetch(`/api/reveal-file?path=${encodeURIComponent(path)}`)
       .then((r) => {
         if (!r.ok) return r.json().then((j) => Promise.reject(j.detail || r.statusText))
       })
       .catch((err) => message.error(String(err?.detail ?? err) || t('fileOpenFailed')))
+    return
+  }
+  // 普通 http(s) 链接：拦截 target="_blank" 默认行为，改为弹出固定尺寸独立小窗口，
+  // 避免在 app webview 里点击后整页跳走。
+  const httpTarget = (e.target as HTMLElement).closest?.<HTMLAnchorElement>('a[href^="http://"], a[href^="https://"]')
+  if (httpTarget) {
+    e.preventDefault()
+    const href = httpTarget.getAttribute('href') || ''
+    if (href) window.open(href, '_blank', 'width=1020,height=720,noopener=true')
   }
 }
 
