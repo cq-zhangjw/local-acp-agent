@@ -366,7 +366,7 @@ async def _app_lifespan(app: FastAPI):
         try:
             from utils.mcp_loader import close_mcp_clients
 
-            close_mcp_clients()
+            await close_mcp_clients()
         except Exception:  # noqa: BLE001 - cleanup must never raise
             pass
         # Kill the local llama-server process tree (API_MODE=local) so it never
