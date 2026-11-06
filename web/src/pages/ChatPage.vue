@@ -4550,8 +4550,8 @@ onBeforeUnmount(() => {
 .manage-form-field .n-transfer { flex:1; height:auto; min-height:0; }
 .manage-form-code :deep(textarea) { font-family:"Cascadia Code",Consolas,monospace; font-size:12px; line-height:1.6; }
 .manage-form-actions { display:flex; justify-content:flex-end; gap:8px; }
-.agent-option-name { display:flex; align-items:center; gap:6px; font-size:13px; }
-.agent-option-icon { font-size:15px; color:var(--accent, #2563eb); }
+.agent-option-name { display:flex; align-items:center; gap:10px; font-size:13px; }
+.agent-option-icon { font-size:15px; color:var(--accent, #2563eb); margin-right:2px; }
 .manage-modal--large :deep(.n-transfer-list) { height:100%; }
 .manage-modal--large :deep(.n-transfer-list-body) { height:calc(100% - 38px); }
 .quick-action-panel { position:absolute; bottom:calc(100% + 8px); left:0; right:0; z-index:30; max-height:220px; overflow-y:auto; padding:4px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(29,39,51,.12); display:flex; flex-direction:column; gap:2px; }
