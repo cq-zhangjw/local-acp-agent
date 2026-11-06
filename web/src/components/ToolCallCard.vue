@@ -51,11 +51,11 @@ function jsonValue(value: unknown) {
 // 参数理论上始终是 JSON 对象/字符串 → 用 ```json 代码块 + markdown 渲染（带语法高亮与复制按钮）
 const paramsMarkdown = computed(() => `\`\`\`json\n${jsonValue(props.tool.rawInput)}\n\`\`\``)
 
-// 返回值可能携带 markdown（如 execute 的 Command/Output/Status 结构）→ markdown 渲染；
+// 返回值：统一用 ```bash 代码块包裹（read_file/execute/工具返回都是命令行风格输出）；
 // 若为对象则回退为 JSON 代码块
 const outputMarkdown = computed(() => {
   const raw = props.tool.output
-  if (typeof raw === 'string') return raw
+  if (typeof raw === 'string') return `\`\`\`bash\n${raw}\n\`\`\``
   return `\`\`\`json\n${jsonValue(raw)}\n\`\`\``
 })
 
