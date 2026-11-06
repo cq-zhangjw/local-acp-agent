@@ -216,6 +216,60 @@ def _msg_is_summary(m) -> bool:
     return bool(text and text.lstrip().startswith(SUMMARY_PREFIX))
 
 
+def _overhead_breakdown(agent_name: str) -> dict:
+    """Estimate the fixed overhead tokens that are NOT in the message list:
+    system prompt + tool schemas. These are never compacted, but they DO count
+    against content_size, so the debug view should show them explicitly.
+    """
+    # system prompt (reuse acp_agent's loader so Chat vs Default logic matches)
+    try:
+        sp_text = _acp.get_system_prompt(agent_name) or ""
+    except Exception:  # noqa: BLE001
+        sp_text = ""
+    sp_tokens = round(estimate_text_tokens(sp_text))
+
+    # tools: inner_tools (built-in deepagents) + mcp_tools (from agents.json)
+    tool_rows = []
+    try:
+        with open(".deepagents/agents/agents.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        agent_cfg = cfg.get(agent_name, {})
+        tools_cfg = agent_cfg.get("tools", {})
+        for t in tools_cfg.get("inner_tools", []) or []:
+            tool_rows.append({
+                "name": t, "source": "builtin",
+                "description": "(deepagents 内置工具)",
+                "tokens": round(estimate_text_tokens(t + " (built-in deepagents tool)")),
+            })
+        for mcp in tools_cfg.get("mcp_tools", []) or []:
+            server = mcp.get("server", "?")
+            for t in mcp.get("tools", []) or []:
+                desc = t.get("description") or ""
+                schema = t.get("inputSchema") or {}
+                full = f"mcp_{server}_{t.get('name','?')}\n{desc}\n{json.dumps(schema, ensure_ascii=False)}"
+                tool_rows.append({
+                    "name": f"mcp_{server}_{t.get('name','?')}",
+                    "source": f"mcp:{server}",
+                    "description": desc,
+                    "tokens": round(estimate_text_tokens(full)),
+                })
+    except Exception:  # noqa: BLE001
+        pass
+
+    tool_tokens = sum(t["tokens"] for t in tool_rows)
+    return {
+        "system_prompt": {
+            "chars": len(sp_text),
+            "tokens": sp_tokens,
+            "preview": sp_text[:1500],
+            "truncated": len(sp_text) > 1500,
+        },
+        "tools": tool_rows,
+        "tool_count": len(tool_rows),
+        "total_tokens": sp_tokens + tool_tokens,
+    }
+
+
 def _build_context_report(session_id: str, agent_name: str, max_chars: int) -> dict:
     """Assemble the debug report for the context the next prompt will use."""
     messages_json = sc_get_context(session_id)
@@ -286,6 +340,7 @@ def _build_context_report(session_id: str, agent_name: str, max_chars: int) -> d
             "pct": round(100 * tokens / CONTENT_SIZE, 1) if CONTENT_SIZE else 0,
         },
         "messages": rows,
+        "overhead": _overhead_breakdown(agent_name),
     }
 
 
@@ -328,6 +383,43 @@ def _html_context_report(report: dict) -> str:
         f"max-height:340px;overflow:auto'>{esc(summary['recent'] or '（空）')}</pre></div></div>"
     )
 
+    # Overhead 组成：system prompt + 工具 schema（默认折叠，避免页面过长）
+    oh = report.get("overhead") or {}
+    oh_sp = oh.get("system_prompt") or {}
+    oh_tools = oh.get("tools") or []
+    tool_rows_html = "".join(
+        f"<tr><td style='padding:4px 8px;font-family:ui-monospace,Consolas,monospace;"
+        f"font-size:12px;color:#2563eb'>{esc(t['name'])}</td>"
+        f"<td style='padding:4px 8px;font-size:12px;color:#6b7280'>{esc(t['source'])}</td>"
+        f"<td style='padding:4px 8px;text-align:right;font-size:12px;color:#6b7280'>{t['tokens']}</td>"
+        f"<td style='padding:4px 8px;font-size:12px;color:#374151;word-break:break-word'>"
+        f"{esc(t['description'][:160])}</td></tr>"
+        for t in oh_tools
+    )
+    overhead_block = (
+        "<details style='margin:20px 0;background:#fff;border:1px solid #e5e7eb;"
+        "border-radius:10px;padding:12px 16px'>"
+        f"<summary style='cursor:pointer;font-weight:600;font-size:14px'>"
+        f"Overhead 组成（system prompt + 工具 schema，约 {oh.get('total_tokens',0)} tokens，"
+        f"{oh.get('tool_count',0)} 个工具）— 永不压缩</summary>"
+        "<div style='margin-top:12px'>"
+        f"<div style='font-size:13px;color:#6b7280;margin-bottom:4px'>System prompt "
+        f"（{oh_sp.get('tokens',0)} tokens）</div>"
+        f"<pre style='white-space:pre-wrap;word-break:break-word;margin:0 0 14px;"
+        f"font-size:12px;line-height:1.6;max-height:300px;overflow:auto;background:#f8fafc;"
+        f"padding:10px 12px;border-radius:6px'>{esc(oh_sp.get('preview') or '（空）')}"
+        f"{' …（已截断）' if oh_sp.get('truncated') else ''}</pre>"
+        f"<div style='font-size:13px;color:#6b7280;margin-bottom:4px'>工具 schema（{oh.get('tool_count',0)} 个）</div>"
+        "<table style='border-collapse:collapse;width:100%;font-size:12px'>"
+        "<thead><tr style='background:#f1f5f9'>"
+        "<th style='padding:6px 8px;text-align:left'>工具名</th>"
+        "<th style='padding:6px 8px;text-align:left'>来源</th>"
+        "<th style='padding:6px 8px;text-align:right'>tokens</th>"
+        "<th style='padding:6px 8px;text-align:left'>描述</th></tr></thead>"
+        f"<tbody>{tool_rows_html}</tbody></table>"
+        "</div></details>"
+    )
+
     rows = []
     for m in report["messages"]:
         is_sum = m["is_summary"]
@@ -360,7 +452,7 @@ def _html_context_report(report: dict) -> str:
         "<h2 style='margin:0 0 4px'>当前上下文（下一次请求真正喂给模型的内容）</h2>"
         f"<div style='color:#6b7280;font-size:13px;margin-bottom:18px'>session："
         f"<code>{esc(report['session_id'])}</code> · agent：{esc(report['agent'])}"
-        " · 不含 system prompt 与工具 schema（那部分由 overhead 统一估算）</div>"
+        " · 消息列表 + 下方 Overhead 组成（system prompt + 工具 schema）合起来才是完整 prompt</div>"
 
         "<div style='display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px'>"
         f"<div style='background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 16px'>"
@@ -391,6 +483,7 @@ def _html_context_report(report: dict) -> str:
 
         "<h3 style='margin:20px 0 8px;font-size:15px'>分层摘要</h3>"
         f"{summary_block}"
+        f"{overhead_block}"
 
         "<h3 style='margin:22px 0 8px;font-size:15px'>消息列表"
         "<span style='font-size:12px;color:#6b7280;font-weight:400'>"
