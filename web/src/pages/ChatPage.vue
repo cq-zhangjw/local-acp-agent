@@ -1664,14 +1664,23 @@ async function removeSubagent(agent: any) {
     message.error(e.message)
   }
 }
-/** Sub-agent panel: list only agents linked in the current agent's `subagents` field. */
-const subagentList = computed(() => {
+/** Sub-agent panel: list all enabled agents except the current one.
+ *  Each row has a switch to toggle whether it's in the current agent's subagents.
+ *  Built-in agents (default, Chat) are always off and disabled. */
+const subagentList = computed(() =>
+  agentList.value.filter((a) => a.enabled !== false && a.name !== currentAgentName.value)
+)
+
+const BUILTIN_AGENTS = ['default', 'Chat']
+function isBuiltinAgent(name: string) { return BUILTIN_AGENTS.includes(name) }
+
+async function toggleSubagent(agent: any, on: boolean) {
+  if (isBuiltinAgent(agent.name)) return
   const current = agentList.value.find((a) => a.name === currentAgentName.value)
-  const linked = (current?.subagents || []) as string[]
-  return linked
-    .map((name) => agentList.value.find((a) => a.name === name))
-    .filter((a): a is any => !!a && a.enabled !== false)
-})
+  const subs = (current?.subagents || []) as string[]
+  const next = on ? [...new Set([...subs, agent.name])] : subs.filter((s) => s !== agent.name)
+  await saveSubagents(next)
+}
 /** 当前激活 Agent 的定义（子 Agent 面板顶部高亮卡片）。 */
 const currentAgentDef = computed(() => agentList.value.find((a) => a.name === currentAgentName.value))
 /** Delete an agent (md file + agents.json entry + references). default is protected. */
@@ -4074,21 +4083,14 @@ onBeforeUnmount(() => {
         <!-- 子 Agent 面板 -->
         <div v-else-if="rightPanelTab === 'subagents'" class="panel-section">
           <div v-if="!subagentList.length" class="panel-placeholder"><p>{{ actionLabels.emptyList }}</p></div>
-          <div v-for="agent in subagentList" :key="agent.name" class="manage-card" :class="{ 'manage-card--sub-linked': isSubagentOfCurrent(agent.name) }" role="button" tabindex="0" @click="selectAgent(agent.name)">
+          <div v-for="agent in subagentList" :key="agent.name" class="manage-card" :class="{ 'manage-card--sub-linked': isSubagentOfCurrent(agent.name) }" @click.stop>
             <div class="manage-card-head">
               <strong>{{ displayAgentName(agent.name) }}</strong>
               <span class="manage-card-head-right">
-                <NTag v-if="isSubagentOfCurrent(agent.name)" size="small" type="warning">{{ actionLabels.subagents }}</NTag>
+                <NSwitch size="small" :value="isSubagentOfCurrent(agent.name)" :disabled="isBuiltinAgent(agent.name)" @update:value="(v: boolean) => toggleSubagent(agent, v)" />
               </span>
             </div>
             <p v-if="agent.description" class="manage-card-desc" :title="agent.description">{{ agent.description }}</p>
-            <div v-if="(agent.subagents || []).length" class="manage-card-chips">
-              <span class="manage-chip-label">{{ actionLabels.linkedSubagents }}</span>
-              <NTag v-for="s in agent.subagents" :key="s" size="small" type="warning">{{ displayAgentName(s) }}</NTag>
-            </div>
-            <div class="manage-card-actions">
-              <NButton quaternary size="tiny" type="error" :disabled="agent.name === currentAgentName" @click.stop="removeSubagent(agent)">{{ actionLabels.delete }}</NButton>
-            </div>
           </div>
         </div>
         <!-- 知识库管理 -->
