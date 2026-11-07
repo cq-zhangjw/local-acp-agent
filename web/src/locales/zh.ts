@@ -75,6 +75,8 @@ export default {
     running: '运行中',
     waiting_permission: '等待授权',
   },
+  thinking: '思考中',
+  thoughtDone: '已思考',
 
   voice: {
     windowTitle: '语音通话',

@@ -75,6 +75,8 @@ export default {
     running: 'Running',
     waiting_permission: 'Waiting for approval',
   },
+  thinking: 'Thinking',
+  thoughtDone: 'Thought',
 
   voice: {
     windowTitle: 'Voice Call',

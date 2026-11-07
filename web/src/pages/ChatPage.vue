@@ -69,6 +69,7 @@ import ExecutionProcess from '../components/ExecutionProcess.vue'
 import KnowledgeManageModal from '../components/KnowledgeManageModal.vue'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
 import ToolCallCard from '../components/ToolCallCard.vue'
+import ThoughtCard from '../components/ThoughtCard.vue'
 import { fetchKnowledgeConfig, fetchKnowledgeDatabases, toggleKnowledgeDb, startKnowledgeService, stopKnowledgeService, type KnowledgeDb } from '../api/knowledge'
 
 type TaskStatus = 'pending' | 'streaming' | 'completed' | 'cancelled' | 'failed' | 'waiting_permission'
@@ -117,7 +118,7 @@ interface ExecutionProcess {
 }
 
 interface TextSegment { id: string; type: 'text'; text: string; html?: string }
-interface ThoughtSegment { id: string; type: 'thought'; text: string }
+interface ThoughtSegment { id: string; type: 'thought'; text: string; done: boolean }
 interface PlanSegment { id: string; type: 'plan' }
 interface ToolSegment { id: string; type: 'tool'; toolId: string }
 type AssistantSegment = TextSegment | ThoughtSegment | PlanSegment | ToolSegment
@@ -308,6 +309,8 @@ const actionLabels = computed(() => ({
   contextTooltip: locale.value === 'zh' ? '当前会话上下文用量（本地估算）' : locale.value === 'ja' ? '現在のセッションのコンテキスト使用量（ローカル推定）' : 'Current session context usage (local estimate)',
   compactContext: locale.value === 'zh' ? '压缩上下文' : locale.value === 'ja' ? 'コンテキストを圧縮' : 'Compact context',
   viewContext: locale.value === 'zh' ? '查看上下文' : locale.value === 'ja' ? 'コンテキストを表示' : 'View context',
+  thinking: locale.value === 'zh' ? '思考中' : locale.value === 'ja' ? '考え中' : 'Thinking',
+  thoughtDone: locale.value === 'zh' ? '已思考' : locale.value === 'ja' ? '思考完了' : 'Thought',
   compacting: locale.value === 'zh' ? '压缩中...' : locale.value === 'ja' ? '圧縮中...' : 'Compacting...',
   compactDone: locale.value === 'zh' ? '上下文已压缩' : locale.value === 'ja' ? 'コンテキストを圧縮しました' : 'Context compacted',
   compactFailed: locale.value === 'zh' ? '压缩失败' : locale.value === 'ja' ? '圧縮失敗' : 'Compaction failed',
@@ -2202,7 +2205,15 @@ function appendThoughtSegment(assistant: AssistantMessage, text: string) {
   if (!text) return
   const last = assistant.segments.at(-1)
   if (last?.type === 'thought') last.text += text
-  else assistant.segments.push({ id: createId('thought'), type: 'thought', text })
+  else assistant.segments.push({ id: createId('thought'), type: 'thought', text, done: false })
+}
+
+/** Mark the latest thought segment as finished (called when text/tool chunks start). */
+function closeLastThought(assistant: AssistantMessage) {
+  for (let i = assistant.segments.length - 1; i >= 0; i--) {
+    const seg = assistant.segments[i]
+    if (seg.type === 'thought') { seg.done = true; break }
+  }
 }
 
 function ensurePlanSegment(assistant: AssistantMessage) {
@@ -2282,6 +2293,7 @@ function handleSessionUpdate(update: any) {
   switch (update.sessionUpdate) {
     case 'agent_message_chunk':
       assistant.status = 'streaming'
+      closeLastThought(assistant)
       appendTextSegment(assistant, textFromContent(update.content))
       break
     case 'agent_thought_chunk': {
@@ -2304,6 +2316,7 @@ function handleSessionUpdate(update: any) {
     case 'tool_call_start': {
       const id = update.toolCallId ?? createId('tool')
       assistant.status = 'streaming' // keep running during tool calls so the stop button stays
+      closeLastThought(assistant)
       if (!process.toolCalls.some((tool) => tool.id === id)) {
         process.toolCalls.push({
           id,
@@ -3692,7 +3705,8 @@ onBeforeUnmount(() => {
               </div>
               <template v-else>
                 <template v-for="segment in item.segments" :key="segment.id">
-                  <MarkdownMessage v-if="segment.type === 'text' || segment.type === 'thought'" class="assistant-content" :content="segment.text" :html="segment.type === 'text' ? segment.html : undefined" @open-file="openFilePreview" />
+                  <MarkdownMessage v-if="segment.type === 'text'" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
+                  <ThoughtCard v-else-if="segment.type === 'thought' && segment.text.trim().length > 0" :text="segment.text" :done="segment.done" />
                   <ExecutionProcess v-else-if="segment.type === 'plan'" :process="item.process" :todo-items="currentTodoItems" />
                   <ToolCallCard v-else-if="segment.type === 'tool'" :tool="segmentTool(item, segment)" @open-file="openFilePreview" />
                 </template>

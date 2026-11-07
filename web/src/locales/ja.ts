@@ -75,6 +75,8 @@ export default {
     running: '実行中',
     waiting_permission: '権限待ち',
   },
+  thinking: '考え中',
+  thoughtDone: '思考完了',
 
   voice: {
     windowTitle: '音声通話',

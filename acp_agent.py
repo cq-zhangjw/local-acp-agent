@@ -28,6 +28,32 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
 from deepagents.backends.protocol import ExecuteResponse
 from deepagents_acp.server import AgentServerACP, AgentSessionContext
+
+# Patch: local OpenAI-compatible servers (llama-server / Ornith / Qwen3) stream
+# reasoning into `message.additional_kwargs.reasoning_content`, NOT into
+# content_blocks. The stock `_content_updates` only reads content_blocks, so
+# reasoning deltas are dropped and the frontend sees a frozen screen during
+# thinking. Wrap it to also emit AgentThoughtChunk for reasoning_content.
+import deepagents_acp.server as _da_server  # noqa: E402
+
+_orig_content_updates = _da_server._content_updates
+
+
+def _content_updates_with_reasoning(message: Any, message_id: str | None = None):
+    updates = _orig_content_updates(message, message_id)
+    rc = getattr(message, "additional_kwargs", {}).get("reasoning_content")
+    if isinstance(rc, str) and rc:
+        updates.append(
+            _da_server.AgentThoughtChunk(
+                session_update="agent_thought_chunk",
+                content=_da_server.text_block(rc),
+                message_id=message_id,
+            )
+        )
+    return updates
+
+
+_da_server._content_updates = _content_updates_with_reasoning
 from langchain_core.messages import HumanMessage, RemoveMessage, convert_to_messages
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
