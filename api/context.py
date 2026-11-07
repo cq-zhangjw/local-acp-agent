@@ -167,12 +167,18 @@ async def _usage(session_id: str, agent_name: str) -> dict:
             await conn.close()
 
     objs = convert_to_messages(messages_json) if messages_json else []
-    tokens = estimate_tokens(objs) if objs else 0
+    msg_tokens = estimate_tokens(objs) if objs else 0
+    overhead = _overhead_breakdown(agent_name)
+    overhead_tokens = overhead.get("total_tokens", 0)
+    total_tokens = msg_tokens + overhead_tokens
     return {
         "ok": True,
-        "tokens": tokens,
+        "tokens": total_tokens,
+        "message_tokens": msg_tokens,
+        "overhead_tokens": overhead_tokens,
+        "overhead_breakdown": overhead,
         "total": CONTENT_SIZE,
-        "pct": round(100 * tokens / CONTENT_SIZE),
+        "pct": round(100 * total_tokens / CONTENT_SIZE),
         "message_count": len(objs),
     }
 
