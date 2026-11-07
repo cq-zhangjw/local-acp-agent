@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { ChevronDownOutline, ChevronUpOutline, SparklesOutline } from '@vicons/ionicons5'
@@ -12,10 +12,18 @@ const startTime = Date.now()
 const elapsed = ref(0)
 let timer: number | undefined
 
+function tick() { elapsed.value = (Date.now() - startTime) / 1000 }
+function stopTimer() { if (timer) { clearInterval(timer); timer = undefined } }
+
 onMounted(() => {
-  timer = window.setInterval(() => { elapsed.value = (Date.now() - startTime) / 1000 }, 200)
+  timer = window.setInterval(tick, 200)
 })
-onBeforeUnmount(() => { if (timer) clearInterval(timer) })
+onBeforeUnmount(stopTimer)
+
+// When the thought finishes, freeze the elapsed time and collapse the card.
+watch(() => props.done, (d) => {
+  if (d) { tick(); stopTimer(); expanded.value = false }
+})
 
 // 思考太短（<200 字符）不显示卡片——调用方在外面判断
 const chars = computed(() => props.text.length)

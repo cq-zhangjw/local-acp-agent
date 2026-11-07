@@ -2204,7 +2204,18 @@ function appendTextSegment(assistant: AssistantMessage, text: string) {
 function appendThoughtSegment(assistant: AssistantMessage, text: string) {
   if (!text) return
   const last = assistant.segments.at(-1)
-  if (last?.type === 'thought') last.text += text
+  if (last?.type === 'thought') {
+    // Throttle: reasoning streams token-by-token; appending every chunk
+    // triggers a full Vue re-render of the 1400+ char card on each token.
+    // Buffer locally and flush on a timer so the card updates ~16x/sec.
+    ;(last as any)._buf = ((last as any)._buf || '') + text
+    if ((last as any)._flushTimer) return
+    ;(last as any)._flushTimer = window.setTimeout(() => {
+      ;(last as any)._flushTimer = undefined
+      const buf = (last as any)._buf
+      if (buf) { last.text += buf; ;(last as any)._buf = '' }
+    }, 60)
+  }
   else assistant.segments.push({ id: createId('thought'), type: 'thought', text, done: false })
 }
 
@@ -2212,7 +2223,14 @@ function appendThoughtSegment(assistant: AssistantMessage, text: string) {
 function closeLastThought(assistant: AssistantMessage) {
   for (let i = assistant.segments.length - 1; i >= 0; i--) {
     const seg = assistant.segments[i]
-    if (seg.type === 'thought') { seg.done = true; break }
+    if (seg.type === 'thought') {
+      // Flush any buffered reasoning text before marking done.
+      const pending = (seg as any)._buf
+      if (pending) { seg.text += pending; ;(seg as any)._buf = '' }
+      if ((seg as any)._flushTimer) { clearTimeout((seg as any)._flushTimer); ;(seg as any)._flushTimer = undefined }
+      seg.done = true
+      break
+    }
   }
 }
 
