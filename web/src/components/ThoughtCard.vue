@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { ChevronDownOutline, ChevronUpOutline, SparklesOutline } from '@vicons/ionicons5'
@@ -10,6 +10,7 @@ const { t } = useI18n()
 const expanded = ref(false)
 const startTime = Date.now()
 const elapsed = ref(0)
+const bodyRef = ref<HTMLElement | null>(null)
 let timer: number | undefined
 
 function tick() { elapsed.value = (Date.now() - startTime) / 1000 }
@@ -23,6 +24,14 @@ onBeforeUnmount(stopTimer)
 // When the thought finishes, freeze the elapsed time and collapse the card.
 watch(() => props.done, (d) => {
   if (d) { tick(); stopTimer(); expanded.value = false }
+})
+
+// Auto-scroll to bottom while streaming (only while not done; after done the
+// user may want to read from the top, so we don't force-scroll).
+watch(() => props.text, async () => {
+  if (props.done) return
+  await nextTick()
+  if (bodyRef.value) bodyRef.value.scrollTop = bodyRef.value.scrollHeight
 })
 
 // 思考太短（<200 字符）不显示卡片——调用方在外面判断
@@ -43,7 +52,7 @@ const chars = computed(() => props.text.length)
       <NIcon :component="expanded ? ChevronUpOutline : ChevronDownOutline" class="thought-chevron" />
     </button>
     <div v-if="expanded || !done" class="thought-body">
-      <div class="thought-text">{{ text }}</div>
+      <div ref="bodyRef" class="thought-text">{{ text }}</div>
     </div>
   </div>
 </template>
