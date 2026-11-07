@@ -1621,11 +1621,11 @@ const agentDropdownOptions = computed(() =>
     .filter((agent) => agent.enabled !== false)
     // In task mode, the lightweight Chat agent must not be selectable —
     // Chat mode conversations pin the Chat agent; task mode keeps the full workspace.
-    .filter((agent) => toolbarChatMode.value || agent.name !== 'Chat')
+    .filter((agent) => isChatMode.value || agent.name !== 'Chat')
     .map((agent) => ({
       key: agent.name,
       label: () =>
-        h('div', { style: 'display:flex;align-items:center;gap:14px;font-size:13px;padding:2px 0;' }, [
+        h('div', { style: 'display:flex;align-items:center;gap:3px;font-size:13px;padding:2px 0;' }, [
           h(NIcon, { component: SparklesOutline, style: 'font-size:15px;color:var(--accent,#2563eb);margin-right:2px;' }),
           h('span', displayAgentName(agent.name))
         ])
