@@ -2,73 +2,59 @@
 
 ## 问题
 
-推理模型（Ornith-1.5、Qwen3、DeepSeek-R1、GPT-o 系列）在正式回复前会先生成一段思考（reasoning）。
-在这段时间里：
-- `content` 字段为空 → 前端收不到 `agent_message_chunk`
-- 画面停在"思考中"状态，没有任何内容滚动，看起来卡住了
+推理模型（Bonsai-2-27B、Ornith-1.5、Qwen3、DeepSeek-R1 等）在正式回复前会先生成一段思考（reasoning）。
+在这段时间里 `content` 字段为空，前端收不到 `agent_message_chunk`，画面停住像卡死。
 
-## 现状（为什么没生效）
+## 两层 Patch
 
-后端 `deepagents_acp/server.py` 已经有 `_content_updates()`：
-- 它遍历 `message.content_blocks`，遇到 `type=reasoning` 的块就发 `agent_thought_chunk`
-- 前端 `ChatPage.vue` 已经有 `ThoughtSegment`、`appendThoughtSegment`、渲染逻辑
+### 第一层：langchain-openai delta 解析
 
-**缺口**：本地 llama-server（OpenAI 兼容接口）把思考放在 `message.additional_kwargs.reasoning_content`，
-而不是 `content_blocks` 里。`_visible_reasoning()` 只查 `block.get("reasoning")`，
-所以本地模型的思考流被吞了，前端收不到任何 chunk。
+`langchain-openai` 的 `_convert_delta_to_message_chunk` 函数**不解析** `reasoning_content` 字段
+（DeepSeek/ninfer/llama.cpp 的约定），即使 HTTP 响应里有这个字段，langchain 也会直接丢弃。
 
-## 方案
+在 `acp_agent.py` 里包一层，把 delta 里的 `reasoning_content` 塞进 `additional_kwargs`：
 
-### 后端：monkey-patch `_content_updates`，补 `reasoning_content` 提取
+```python
+import langchain_openai.chat_models.base as _loc
+_orig = _loc._convert_delta_to_message_chunk
 
-在 `acp_agent.py` 启动时 patch `deepagents_acp.server._content_updates`：
-- 原逻辑保留（处理 OpenAI o 系列的 encrypted reasoning block）
-- 额外检查 `message.additional_kwargs.get("reasoning_content")`：
-  - 非空字符串 → 包成 `AgentThoughtChunk` 发出去
-  - 空/None → 不发
-- 这样本地 Ornith/Qwen3 的实时思考也能流式推到前端
+def _convert_delta_with_reasoning(_dict, default_class):
+    msg = _orig(_dict, default_class)
+    rc = _dict.get("reasoning_content")
+    if rc and hasattr(msg, "additional_kwargs"):
+        msg.additional_kwargs["reasoning_content"] = rc
+    return msg
 
-不直接改 site-packages：
-- patch 写在我们自己的 `acp_agent.py` 里，升级包不丢
-- patch 在 `import deepagents_acp` 之后、启动 server 之前执行
-
-### 前端：thought 段改成折叠卡片
-
-现在 thought 段和正文混排（同一段 MarkdownMessage），改成独立卡片：
-
-```
-┌─────────────────────────────────────┐
-│ 💭 思考中…（已用 3.2s）    ▾/▴     │  ← 思考中：淡灰底色 + spinner
-│ ┌─────────────────────────────────┐ │
-│ │ 嗯，用户想做 A... 我需要先查... │ │  ← 实时流出，max-height 300px 滚动
-│ └─────────────────────────────────┘ │
-└─────────────────────────────────────┘
+_loc._convert_delta_to_message_chunk = _convert_delta_with_reasoning
 ```
 
-思考完成后折叠成一行：
-```
-💭 已思考 8.4s · 2,314 tokens · 点击展开
-```
+### 第二层：`_content_updates` 转发
 
-细节：
-- 思考中：浅灰蓝底（#f0f4ff），等宽字体，右侧 spinner
-- 完成：折成单行，右侧显示用时
-- 点击展开/折叠
-- 少于 200 字符的思考不显示（避免一闪而过的噪声）
-- 正式回复（agent_message_chunk）仍走原来的 TextSegment，不混
+`deepagents_acp/server.py` 的 `_content_updates()` 原本只认 `content_blocks` 里的 `type=reasoning` 块。
+patch 它，额外检查 `additional_kwargs` 里的 `reasoning_content`，包成 `AgentThoughtChunk` 发出。
+
+两层 patch 都在 `acp_agent.py` 模块级执行，import 时即生效，不改 site-packages。
+
+## 前端
+
+`ThoughtCard.vue`：
+- 思考中：淡蓝卡片实时流式 + 计时器（200ms 刷新）
+- 完成：自动折叠成一行"已思考 · Xs · Y chars"，点击可展开
+- 计时器在 done 时冻结
+- reasoning 文本每 60ms 批量刷新一次（避免每个 token 重渲染 1400+ 字卡片）
+
+## 适配的模型/服务
+
+| 服务 | 思考字段 | 状态 |
+|---|---|---|
+| ninfer / llama.cpp (Bonsai-2-27B) | `delta.reasoning_content` | ✅ |
+| DeepSeek API | `delta.reasoning_content` | ✅ |
+| OpenAI o/GPT-5 系列 | `content_blocks` type=reasoning | ✅（原生支持） |
 
 ## 改动文件
 
 | 文件 | 改动 |
 |---|---|
-| `acp_agent.py` | 启动时 monkey-patch `_content_updates`，补 `reasoning_content` 提取 |
-| `web/src/pages/ChatPage.vue` | thought segment 渲染改为折叠卡片组件 |
-| `web/src/components/ThoughtCard.vue` | 新建：思考中/已思考两态卡片 |
-
-## 验证
-
-1. 本地 Ornith-1.5 模型问一个需要推理的问题（如"12345 开方是多少"）
-2. 发送后立即看到思考卡片实时流出文字
-3. 思考完卡片折叠成一行，正式回复开始流式
-4. 切换到 GPT-5-mini：如果它返回 reasoning block，同样能看到
-5. 普通短问题（无思考）：不显示卡片
+| `acp_agent.py` | 两层 monkey-patch（delta 解析 + _content_updates） |
+| `web/src/components/ThoughtCard.vue` | 思考卡片组件 |
+| `web/src/pages/ChatPage.vue` | thought segment 渲染 + 60ms 节流 |

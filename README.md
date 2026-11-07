@@ -4,7 +4,7 @@ This project is a runnable ACP (Agent Client Protocol) web integration example: 
 
 ## Overview
 
-- **Streaming chat**: AI replies stream in real time — text, thought, execution plan and tool-call cards are rendered incrementally; Markdown, code highlight, Mermaid diagrams and sanitized inline HTML are all supported.
+- **Streaming chat**: AI replies stream in real time — text, thought, execution plan and tool-call cards are rendered incrementally; Markdown, code highlight, Mermaid diagrams and sanitized inline HTML are all supported. Reasoning/thinking content from local OpenAI-compatible servers (ninfer / llama.cpp / DeepSeek-style `reasoning_content`) is surfaced in a collapsible ThoughtCard that streams live during model thinking, then collapses to a one-line summary (`已思考 · Xs · Y chars`) — see `docs/reasoning-thought-streaming.md`.
 - **Tool calls**: each tool card shows parameters / return value in collapsible `json` tabs; permission requests (`session/request_permission`) can be approved, rejected or always-approved.
 - **Message actions**: copy (plain text or Markdown), retry (last AI message only), edit (Markdown source editing without re-running), delete via the `...` menu.
 - **Conversations**: recent-conversation sidebar with search/filter, rename via context menu, delete with confirmation, and timestamps in `YYYY/MM/DD hh:mm:ss`. History is persisted **backend-authoritatively** in a local MooFile store (`db/db_history_<hash8>/db.bson` via `/api/history`, following the same `db_<name>_<hash8>` directory convention as the moofile_base knowledge bases so all data under `db/` is uniformly organized); the frontend only reads history (forced `GET` on entering a session) and no longer pushes it or relies on `localStorage`. `HISTORY_ROOT` can override the directory (default: auto-discover `db/db_history_*`, create one on first run). Every record is tagged with the moofile_base data model (`recordType: "record"` + `dbId`) so the knowledge-base management UI can browse chat history like any plain table. The sidebar groups conversations into three collapsible categories: **Chats** (`mode: 'chat'`, lightweight conversations), **Agents** (`mode` task/default, full workspace) and **Scheduled Tasks** (`timer-*` sessions created by the scheduler).
@@ -377,6 +377,15 @@ Or stop the process using that port before starting the server.
 - Uploaded files currently have no quota or cleanup policy.
 - There is no authentication layer; production deployments should add token validation.
 - The current example is demo-oriented and can be extended into a multi-session or multi-tenant architecture.
+
+## Changelog
+
+### v0.3.0 — Real-time reasoning streaming
+
+- **ThoughtCard**: live reasoning/thinking stream from local OpenAI-compatible servers (ninfer / llama.cpp / DeepSeek-style `reasoning_content`). Auto-collapses to `已思考 · Xs · Y chars` when the model moves to the final answer.
+- Two-layer monkey-patch in `acp_agent.py`: wraps `langchain_openai`'s delta parser to extract `reasoning_content` (which stock langchain drops), then wraps `deepagents_acp.server._content_updates` to emit `AgentThoughtChunk`. Works with langchain-openai 1.6.x (no upgrade required).
+- 60ms batching on the frontend keeps the 1400+ char thinking card smooth instead of re-rendering on every token.
+- Tool-card polish: parameters/return values rendered as `json`/`bash` code blocks, MCP startup failures diagnosed and surfaced in red, agent dropdown icon/name spacing.
 
 ## Summary
 

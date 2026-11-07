@@ -37,13 +37,11 @@ from deepagents_acp.server import AgentServerACP, AgentSessionContext
 import deepagents_acp.server as _da_server  # noqa: E402
 
 _orig_content_updates = _da_server._content_updates
-_reasoning_probed = False
 
 
 def _content_updates_with_reasoning(message: Any, message_id: str | None = None):
     updates = _orig_content_updates(message, message_id)
     ak = getattr(message, "additional_kwargs", {}) or {}
-    # Wide match: any additional_kwargs key hinting at reasoning, or top-level attrs.
     rc = ""
     for k, v in ak.items():
         if isinstance(v, str) and v and any(tag in k.lower() for tag in ("reason", "think")):
@@ -55,18 +53,6 @@ def _content_updates_with_reasoning(message: Any, message_id: str | None = None)
             if isinstance(v, str) and v:
                 rc = v
                 break
-    # One-time probe: dump the first non-trivial chunk so we can see where ninfer
-    # actually puts reasoning (maybe not in additional_kwargs at all).
-    global _reasoning_probed
-    if not _reasoning_probed:
-        _reasoning_probed = True
-        content = getattr(message, "content", "")
-        content_preview = str(content)[:300] if content else "(empty)"
-        logger.info("[reasoning-patch] chunk type=%s, ak=%s, attrs=%s, content=%s",
-                    type(message).__name__,
-                    list(ak.keys()),
-                    [a for a in dir(message) if not a.startswith("_") and "reason" in a.lower() or "think" in a.lower()],
-                    content_preview)
     if rc:
         updates.append(
             _da_server.AgentThoughtChunk(
