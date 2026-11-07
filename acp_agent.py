@@ -37,16 +37,14 @@ from deepagents_acp.server import AgentServerACP, AgentSessionContext
 import deepagents_acp.server as _da_server  # noqa: E402
 
 _orig_content_updates = _da_server._content_updates
+_reasoning_probed = False
 
 
 def _content_updates_with_reasoning(message: Any, message_id: str | None = None):
     updates = _orig_content_updates(message, message_id)
     ak = getattr(message, "additional_kwargs", {}) or {}
-    # Wide match: OpenAI-compatible servers put reasoning in various places
-    # (DeepSeek=reasoning_content, llama.cpp=reasoning_content, others=reasoning/thought).
-    # Check additional_kwargs first, then top-level message attributes.
+    # Wide match: any additional_kwargs key hinting at reasoning, or top-level attrs.
     rc = ""
-    ak = getattr(message, "additional_kwargs", {}) or {}
     for k, v in ak.items():
         if isinstance(v, str) and v and any(tag in k.lower() for tag in ("reason", "think")):
             rc = v
@@ -57,6 +55,13 @@ def _content_updates_with_reasoning(message: Any, message_id: str | None = None)
             if isinstance(v, str) and v:
                 rc = v
                 break
+    # One-time probe: dump the first chunk's shape so we can see what field ninfer uses.
+    global _reasoning_probed
+    if not _reasoning_probed and ak:
+        _reasoning_probed = True
+        logger.info("[reasoning-patch] first chunk ak keys=%s, content type=%s, preview=%r",
+                    list(ak.keys()), type(getattr(message, "content", None)).__name__,
+                    str(getattr(message, "content", ""))[:200])
     if rc:
         updates.append(
             _da_server.AgentThoughtChunk(
