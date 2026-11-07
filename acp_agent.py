@@ -41,8 +41,23 @@ _orig_content_updates = _da_server._content_updates
 
 def _content_updates_with_reasoning(message: Any, message_id: str | None = None):
     updates = _orig_content_updates(message, message_id)
-    rc = getattr(message, "additional_kwargs", {}).get("reasoning_content")
-    if isinstance(rc, str) and rc:
+    ak = getattr(message, "additional_kwargs", {}) or {}
+    # Wide match: OpenAI-compatible servers put reasoning in various places
+    # (DeepSeek=reasoning_content, llama.cpp=reasoning_content, others=reasoning/thought).
+    # Check additional_kwargs first, then top-level message attributes.
+    rc = ""
+    ak = getattr(message, "additional_kwargs", {}) or {}
+    for k, v in ak.items():
+        if isinstance(v, str) and v and any(tag in k.lower() for tag in ("reason", "think")):
+            rc = v
+            break
+    if not rc:
+        for attr in ("reasoning_content", "reasoning", "thinking"):
+            v = getattr(message, attr, None)
+            if isinstance(v, str) and v:
+                rc = v
+                break
+    if rc:
         updates.append(
             _da_server.AgentThoughtChunk(
                 session_update="agent_thought_chunk",
