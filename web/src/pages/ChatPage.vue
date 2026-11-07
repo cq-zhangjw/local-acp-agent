@@ -918,6 +918,17 @@ const compactingContext = ref(false)
 // The local estimate is computed from the full history, which compaction
 // never touches, so after an auto/manual compaction only the backend knows
 // the true post-compaction numbers.
+// Throttled context refresh during streaming: the backend recomputes
+// tokens on each request, but hitting it on every chunk is wasteful.
+let _ctxRefreshTimer: number | undefined
+function scheduleContextRefresh() {
+  if (_ctxRefreshTimer) return
+  _ctxRefreshTimer = window.setTimeout(() => {
+    _ctxRefreshTimer = undefined
+    void refreshContextUsage()
+  }, 2000)
+}
+
 async function refreshContextUsage() {
   const conversation = currentConversation.value
   if (!conversation) return
@@ -2330,6 +2341,7 @@ function handleSessionUpdate(update: any) {
       assistant.status = 'streaming'
       closeLastThought(assistant)
       appendTextSegment(assistant, textFromContent(update.content))
+      scheduleContextRefresh()
       break
     case 'agent_thought_chunk': {
       const text = textFromContent(update.content)
@@ -2352,6 +2364,7 @@ function handleSessionUpdate(update: any) {
       const id = update.toolCallId ?? createId('tool')
       assistant.status = 'streaming' // keep running during tool calls so the stop button stays
       closeLastThought(assistant)
+      scheduleContextRefresh()
       if (!process.toolCalls.some((tool) => tool.id === id)) {
         process.toolCalls.push({
           id,
