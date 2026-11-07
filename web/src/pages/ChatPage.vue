@@ -1625,8 +1625,8 @@ const agentDropdownOptions = computed(() =>
     .map((agent) => ({
       key: agent.name,
       label: () =>
-        h('div', { class: 'agent-option-name' }, [
-          h(NIcon, { component: SparklesOutline, class: 'agent-option-icon' }),
+        h('div', { style: 'display:flex;align-items:center;gap:14px;font-size:13px;padding:2px 0;' }, [
+          h(NIcon, { component: SparklesOutline, style: 'font-size:15px;color:var(--accent,#2563eb);margin-right:2px;' }),
           h('span', displayAgentName(agent.name))
         ])
     }))
@@ -1664,10 +1664,14 @@ async function removeSubagent(agent: any) {
     message.error(e.message)
   }
 }
-/** Sub-agent panel list: exclude the active agent itself and the protected default. */
-const subagentList = computed(() =>
-  agentList.value.filter((a) => a.enabled !== false && a.name !== currentAgentName.value && a.name !== 'default')
-)
+/** Sub-agent panel: list only agents linked in the current agent's `subagents` field. */
+const subagentList = computed(() => {
+  const current = agentList.value.find((a) => a.name === currentAgentName.value)
+  const linked = (current?.subagents || []) as string[]
+  return linked
+    .map((name) => agentList.value.find((a) => a.name === name))
+    .filter((a): a is any => !!a && a.enabled !== false)
+})
 /** 当前激活 Agent 的定义（子 Agent 面板顶部高亮卡片）。 */
 const currentAgentDef = computed(() => agentList.value.find((a) => a.name === currentAgentName.value))
 /** Delete an agent (md file + agents.json entry + references). default is protected. */

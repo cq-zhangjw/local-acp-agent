@@ -17,6 +17,10 @@ function tick() { elapsed.value = (Date.now() - startTime) / 1000 }
 function stopTimer() { if (timer) { clearInterval(timer); timer = undefined } }
 
 onMounted(() => {
+  // Historical messages (loaded from history after a page refresh) already have
+  // done=true — don't start the ticking clock, otherwise every past thought card
+  // restarts from 0.0s and keeps counting up forever.
+  if (props.done) return
   timer = window.setInterval(tick, 200)
 })
 onBeforeUnmount(stopTimer)
@@ -47,7 +51,7 @@ const chars = computed(() => props.text.length)
         <span class="thought-time">{{ elapsed.toFixed(1) }}s</span>
       </span>
       <span v-else class="thought-title">
-        {{ t('thoughtDone') }} · {{ elapsed.toFixed(1) }}s · {{ chars }} chars
+        {{ t('thoughtDone') }}<template v-if="elapsed > 0.1"> · {{ elapsed.toFixed(1) }}s</template> · {{ chars }} chars
       </span>
       <NIcon :component="expanded ? ChevronUpOutline : ChevronDownOutline" class="thought-chevron" />
     </button>
