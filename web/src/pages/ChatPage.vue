@@ -1619,6 +1619,9 @@ function resetAgentToDefault() {
 const agentDropdownOptions = computed(() =>
   agentList.value
     .filter((agent) => agent.enabled !== false)
+    // In task mode, the lightweight Chat agent must not be selectable —
+    // Chat mode conversations pin the Chat agent; task mode keeps the full workspace.
+    .filter((agent) => toolbarChatMode.value || agent.name !== 'Chat')
     .map((agent) => ({
       key: agent.name,
       label: () =>
@@ -4066,20 +4069,6 @@ onBeforeUnmount(() => {
         </div>
         <!-- 子 Agent 面板 -->
         <div v-else-if="rightPanelTab === 'subagents'" class="panel-section">
-          <div class="panel-section-note">{{ actionLabels.currentAgent }}</div>
-          <div v-if="currentAgentDef" class="manage-card manage-card--active" role="button" tabindex="0">
-            <div class="manage-card-head">
-              <strong>{{ displayAgentName(currentAgentDef.name) }}</strong>
-              <span class="manage-card-head-right">
-                <NTag size="small" type="primary">{{ actionLabels.currentAgent }}</NTag>
-              </span>
-            </div>
-            <p v-if="currentAgentDef.description" class="manage-card-desc" :title="currentAgentDef.description">{{ currentAgentDef.description }}</p>
-            <div v-if="(currentAgentDef.subagents || []).length" class="manage-card-chips">
-              <span class="manage-chip-label">{{ actionLabels.linkedSubagents }}</span>
-              <NTag v-for="s in currentAgentDef.subagents" :key="s" size="small" type="warning">{{ displayAgentName(s) }}</NTag>
-            </div>
-          </div>
           <div v-if="!subagentList.length" class="panel-placeholder"><p>{{ actionLabels.emptyList }}</p></div>
           <div v-for="agent in subagentList" :key="agent.name" class="manage-card" :class="{ 'manage-card--sub-linked': isSubagentOfCurrent(agent.name) }" role="button" tabindex="0" @click="selectAgent(agent.name)">
             <div class="manage-card-head">
@@ -4582,8 +4571,8 @@ onBeforeUnmount(() => {
 .manage-form-field .n-transfer { flex:1; height:auto; min-height:0; }
 .manage-form-code :deep(textarea) { font-family:"Cascadia Code",Consolas,monospace; font-size:12px; line-height:1.6; }
 .manage-form-actions { display:flex; justify-content:flex-end; gap:8px; }
-.agent-option-name { display:flex; align-items:center; gap:10px; font-size:13px; }
-.agent-option-icon { font-size:15px; color:var(--accent, #2563eb); margin-right:2px; }
+.agent-option-name { display:flex; align-items:center; gap:14px; font-size:13px; }
+.agent-option-icon { font-size:15px; color:var(--accent, #2563eb); margin-right:4px; }
 .manage-modal--large :deep(.n-transfer-list) { height:100%; }
 .manage-modal--large :deep(.n-transfer-list-body) { height:calc(100% - 38px); }
 .quick-action-panel { position:absolute; bottom:calc(100% + 8px); left:0; right:0; z-index:30; max-height:220px; overflow-y:auto; padding:4px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(29,39,51,.12); display:flex; flex-direction:column; gap:2px; }
