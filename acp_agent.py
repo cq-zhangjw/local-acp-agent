@@ -55,13 +55,18 @@ def _content_updates_with_reasoning(message: Any, message_id: str | None = None)
             if isinstance(v, str) and v:
                 rc = v
                 break
-    # One-time probe: dump the first chunk's shape so we can see what field ninfer uses.
+    # One-time probe: dump the first non-trivial chunk so we can see where ninfer
+    # actually puts reasoning (maybe not in additional_kwargs at all).
     global _reasoning_probed
-    if not _reasoning_probed and ak:
+    if not _reasoning_probed:
         _reasoning_probed = True
-        logger.info("[reasoning-patch] first chunk ak keys=%s, content type=%s, preview=%r",
-                    list(ak.keys()), type(getattr(message, "content", None)).__name__,
-                    str(getattr(message, "content", ""))[:200])
+        content = getattr(message, "content", "")
+        content_preview = str(content)[:300] if content else "(empty)"
+        logger.info("[reasoning-patch] chunk type=%s, ak=%s, attrs=%s, content=%s",
+                    type(message).__name__,
+                    list(ak.keys()),
+                    [a for a in dir(message) if not a.startswith("_") and "reason" in a.lower() or "think" in a.lower()],
+                    content_preview)
     if rc:
         updates.append(
             _da_server.AgentThoughtChunk(
