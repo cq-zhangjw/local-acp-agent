@@ -2220,10 +2220,11 @@ function appendTextSegment(assistant: AssistantMessage, text: string) {
 function appendThoughtSegment(assistant: AssistantMessage, text: string) {
   if (!text) return
   const last = assistant.segments.at(-1)
-  if (last?.type === 'thought') {
-    // Throttle: reasoning streams token-by-token; appending every chunk
-    // triggers a full Vue re-render of the 1400+ char card on each token.
-    // Buffer locally and flush on a timer so the card updates ~16x/sec.
+  // Only append to the previous thought segment if it's still open (not done).
+  // After a tool call the previous thought is closed; the next reasoning round
+  // must start a fresh card, otherwise new reasoning text piles onto a stale,
+  // collapsed card and the UI appears frozen.
+  if (last?.type === 'thought' && !last.done) {
     ;(last as any)._buf = ((last as any)._buf || '') + text
     if ((last as any)._flushTimer) return
     ;(last as any)._flushTimer = window.setTimeout(() => {
