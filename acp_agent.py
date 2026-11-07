@@ -79,6 +79,24 @@ def _content_updates_with_reasoning(message: Any, message_id: str | None = None)
 
 
 _da_server._content_updates = _content_updates_with_reasoning
+
+# Patch: langchain-openai's _convert_delta_to_message_chunk ignores the
+# `reasoning_content` field that DeepSeek/ninfer/llama.cpp put in the delta.
+# Wrap it so reasoning deltas land in additional_kwargs, where our
+# _content_updates patch above can pick them up and emit AgentThoughtChunk.
+import langchain_openai.chat_models.base as _loc_openai_base  # noqa: E402
+_orig_convert_delta = _loc_openai_base._convert_delta_to_message_chunk
+
+
+def _convert_delta_with_reasoning(_dict, default_class):
+    msg = _orig_convert_delta(_dict, default_class)
+    rc = _dict.get("reasoning_content")
+    if rc and hasattr(msg, "additional_kwargs"):
+        msg.additional_kwargs["reasoning_content"] = rc
+    return msg
+
+
+_loc_openai_base._convert_delta_to_message_chunk = _convert_delta_with_reasoning
 from langchain_core.messages import HumanMessage, RemoveMessage, convert_to_messages
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
