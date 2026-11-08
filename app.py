@@ -32,6 +32,7 @@ from api.todos import router as todos_router
 from api.knowledge import router as knowledge_router
 from api.manage.manager import router as manage_router
 from api.timers import router as timers_router
+from api.quick_commands import router as quick_commands_router
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -396,6 +397,7 @@ app.include_router(preview_router)
 app.include_router(reveal_router)
 # scheduled tasks sub-router: /api/timers (MooFile-backed, cron/interval)
 app.include_router(timers_router)
+app.include_router(quick_commands_router)
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 

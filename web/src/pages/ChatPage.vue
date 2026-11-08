@@ -70,6 +70,7 @@ import KnowledgeManageModal from '../components/KnowledgeManageModal.vue'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
 import ToolCallCard from '../components/ToolCallCard.vue'
 import ThoughtCard from '../components/ThoughtCard.vue'
+import QuickCommandBar from '../components/QuickCommandBar.vue'
 import { fetchKnowledgeConfig, fetchKnowledgeDatabases, toggleKnowledgeDb, startKnowledgeService, stopKnowledgeService, type KnowledgeDb } from '../api/knowledge'
 
 type TaskStatus = 'pending' | 'streaming' | 'completed' | 'cancelled' | 'failed' | 'waiting_permission'
@@ -2576,6 +2577,18 @@ async function sendAgentPrompt(
   }
 }
 
+/** Quick command card clicked: switch agent/model/mode, then fill input (or auto-send). */
+async function onQuickCommand(cmd: any) {
+  if (cmd.agent && cmd.agent !== currentAgentName.value) selectAgent(cmd.agent)
+  if (cmd.model && cmd.model !== currentModel.value) {
+    currentModel.value = cmd.model
+    localStorage.setItem(MODEL_STORAGE_KEY, cmd.model)
+  }
+  input.value = cmd.content
+  if (cmd.autoSend) await submitPrompt()
+  nextTick(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus())
+}
+
 async function submitPrompt() {
   const text = input.value.trim()
   if ((!text && !attachments.value.length && !screenShareActive.value) || isRunning.value || isUploading.value) return
@@ -3818,6 +3831,7 @@ onBeforeUnmount(() => {
 
       <div v-if="!isTimerSession" class="composer-wrap">
         <div class="composer-column">
+          <QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" />
           <NAlert v-if="errorText" type="error" closable class="task-error" @close="errorText = ''">
             {{ errorText }}
           </NAlert>
