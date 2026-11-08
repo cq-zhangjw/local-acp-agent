@@ -2684,7 +2684,9 @@ async function submitPrompt() {
   input.value = ''
   attachments.value = []
   void saveConversation(conversation)
-  await nextTick(scrollToBottom)
+  // Force scroll to bottom on send — regardless of where the user was scrolled.
+  await nextTick()
+  requestAnimationFrame(() => scrollToBottom(true))
   await sendAgentPrompt(conversation, text, resources, assistantMessage, isNewConversation, false, userMessage)
 }
 
