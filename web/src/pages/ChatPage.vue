@@ -4591,9 +4591,15 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.process-collapse { margin: 8px 0 12px; background:#f8fafc; border:1px solid #e4e8ee; border-radius:10px; }
-.process-collapse :deep(.n-collapse-item__header) { padding:8px 14px; font-size:12px; color:#64748b; }
-.process-collapse__header { font-size:12px; color:#64748b; }
+.process-collapse { margin: 4px 0 12px; background:transparent; border:none; border-radius:0; }
+.process-collapse :deep(.n-collapse-item__header) { padding:4px 0; font-size:12px; color:#94a3b8; line-height:1.6; height:auto; }
+.process-collapse :deep(.n-collapse-item__header:hover) { color:#64748b; }
+.process-collapse :deep(.n-collapse-item__content) { padding-top:8px; }
+.process-collapse :deep(.n-collapse-item__content-inner) { padding:0; }
+.process-collapse :deep(.n-collapse-item) { border:none; }
+.process-collapse__header { font-size:12px; color:#94a3b8; display:flex; align-items:center; gap:4px; }
+.process-collapse :deep(.tool-call-collapse) { margin-top:6px; }
+.process-collapse :deep(.thought-card) { margin-top:6px; }
 
 .chat-app { --canvas:#f7f8fa; --surface:#fff; --muted:#f1f4f8; --border:#e4e8ee; --text:#1d2733; --subtle:#6b7785; height:100vh; height:100dvh; display:flex; overflow:hidden; background:var(--canvas); color:var(--text); }
 .sidebar { width:284px; flex:0 0 284px; height:100%; min-height:0; display:flex; flex-direction:column; padding:18px 14px 14px; background:var(--surface); border-right:1px solid var(--border); overflow:hidden; overflow-x:hidden; } .sidebar .brand-row,.sidebar .sidebar-nav,.sidebar .conversation-search,.sidebar .conversation-list,.sidebar .sidebar-footer { overflow-x:hidden; }
