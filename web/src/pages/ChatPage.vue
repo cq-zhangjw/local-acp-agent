@@ -4596,7 +4596,7 @@ onBeforeUnmount(() => {
 .process-collapse :deep(.n-collapse-item__header:hover) { color:#64748b; }
 .process-collapse :deep(.n-collapse-item__header .n-collapse-item__header-arrow) { font-size:12px; margin-right:4px; }
 .process-collapse :deep(.n-collapse-item__content) { padding-top:6px; }
-.process-collapse :deep(.n-collapse-item__content-inner) { padding:0; }
+.process-collapse :deep(.n-collapse-item__content-inner) { padding:0 4px; }
 .process-collapse :deep(.n-collapse-item) { border:none; }
 .process-collapse__header { font-size:11.5px; color:#94a3b8; }
 .process-collapse :deep(.tool-call-collapse) { margin:4px 0; }
