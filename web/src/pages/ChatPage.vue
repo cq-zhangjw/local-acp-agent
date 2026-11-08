@@ -4596,11 +4596,12 @@ onBeforeUnmount(() => {
 .process-collapse :deep(.n-collapse-item__header:hover) { color:#64748b; }
 .process-collapse :deep(.n-collapse-item__header .n-collapse-item__header-arrow) { font-size:12px; margin-right:4px; }
 .process-collapse :deep(.n-collapse-item__content) { padding-top:6px; }
-.process-collapse :deep(.n-collapse-item__content-inner) { padding:0 4px; }
+.process-collapse :deep(.n-collapse-item__content-inner) { padding:0 10px; }
 .process-collapse :deep(.n-collapse-item) { border:none; }
 .process-collapse__header { font-size:11.5px; color:#94a3b8; }
-.process-collapse :deep(.tool-call-collapse) { margin:4px 0; }
-.process-collapse :deep(.thought-card) { margin:4px 0; }
+.process-collapse :deep(.tool-call-collapse) { margin:6px 0; }
+.process-collapse :deep(.tool-call-collapse .n-collapse-item__header) { padding:10px 14px; }
+.process-collapse :deep(.thought-card) { margin:6px 0; }
 
 .chat-app { --canvas:#f7f8fa; --surface:#fff; --muted:#f1f4f8; --border:#e4e8ee; --text:#1d2733; --subtle:#6b7785; height:100vh; height:100dvh; display:flex; overflow:hidden; background:var(--canvas); color:var(--text); }
 .sidebar { width:284px; flex:0 0 284px; height:100%; min-height:0; display:flex; flex-direction:column; padding:18px 14px 14px; background:var(--surface); border-right:1px solid var(--border); overflow:hidden; overflow-x:hidden; } .sidebar .brand-row,.sidebar .sidebar-nav,.sidebar .conversation-search,.sidebar .conversation-list,.sidebar .sidebar-footer { overflow-x:hidden; }
