@@ -296,6 +296,7 @@ const actionLabels = computed(() => ({
   chatMode: locale.value === 'zh' ? 'Chat 聊天' : locale.value === 'ja' ? 'チャット' : 'Chat',
   historyOn: locale.value === 'zh' ? '历史上下文' : locale.value === 'ja' ? '履歴コンテキスト' : 'History context',
   webSearch: locale.value === 'zh' ? '联网搜索' : locale.value === 'ja' ? 'ウェブ検索' : 'Web search',
+  processSteps: (n: number) => locale.value === 'zh' ? `${n} 步推理过程（点击展开）` : locale.value === 'ja' ? `${n} ステップの推論（クリックで展開）` : `${n} reasoning steps (click to expand)`,
   historyOff: locale.value === 'zh' ? '单轮问答' : locale.value === 'ja' ? '単発Q&A' : 'Single-turn',
   taskMode: locale.value === 'zh' ? 'Agent 任务' : locale.value === 'ja' ? 'エージェントタスク' : 'Agent task',
   chatModeDesc: locale.value === 'zh' ? '轻量聊天，不加载工具与技能' : locale.value === 'ja' ? 'ツールやスキルなしの軽量チャット' : 'Lightweight chat without tools or skills',
@@ -3836,7 +3837,7 @@ onBeforeUnmount(() => {
                   <NCollapse v-if="hasProcessSegments(item)" class="process-collapse">
                     <NCollapseItem name="process">
                       <template #header>
-                        <span class="process-collapse__header">🔧 {{ processStepCount(item) }} 步推理过程（点击展开）</span>
+                        <span class="process-collapse__header">🔧 {{ actionLabels.processSteps(processStepCount(item)) }}</span>
                       </template>
                       <template v-for="segment in processSegments(item)" :key="segment.id">
                         <MarkdownMessage v-if="segment.type === 'text'" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
@@ -4599,12 +4600,12 @@ onBeforeUnmount(() => {
 .process-collapse :deep(.n-collapse-item__content-inner) { padding:0 10px; }
 .process-collapse :deep(.n-collapse-item) { border:none; }
 .process-collapse__header { font-size:11.5px; color:#94a3b8; }
-.process-collapse :deep(.tool-call-collapse) { margin:6px 0; }
-.process-collapse :deep(.tool-call-collapse .n-collapse-item__header) { padding:10px 14px; }
-.process-collapse :deep(.tool-call-collapse .n-collapse-item:first-child > .n-collapse-item__header) { padding:10px 14px; }
-.process-collapse :deep(.tool-call-collapse .n-collapse-item .n-collapse-item__content-wrapper .n-collapse-item__content-inner) { padding-top:0; }
-.process-collapse :deep(.n-collapse .n-collapse-item .n-collapse-item) { margin-left:0; }
-.process-collapse :deep(.thought-card) { margin:0; }
+.process-collapse :deep(.tool-call-collapse) { margin:6px 0 !important; }
+.process-collapse :deep(.tool-call-collapse .n-collapse-item__header) { padding:10px 14px !important; }
+.process-collapse :deep(.tool-call-collapse .n-collapse-item:first-child > .n-collapse-item__header) { padding:10px 14px !important; }
+.process-collapse :deep(.tool-call-collapse .n-collapse-item .n-collapse-item__content-wrapper .n-collapse-item__content-inner) { padding-top:0 !important; }
+.process-collapse :deep(.n-collapse .n-collapse-item .n-collapse-item) { margin-left:0 !important; }
+.process-collapse :deep(.thought-card) { margin:0 !important; }
 
 .chat-app { --canvas:#f7f8fa; --surface:#fff; --muted:#f1f4f8; --border:#e4e8ee; --text:#1d2733; --subtle:#6b7785; height:100vh; height:100dvh; display:flex; overflow:hidden; background:var(--canvas); color:var(--text); }
 .sidebar { width:284px; flex:0 0 284px; height:100%; min-height:0; display:flex; flex-direction:column; padding:18px 14px 14px; background:var(--surface); border-right:1px solid var(--border); overflow:hidden; overflow-x:hidden; } .sidebar .brand-row,.sidebar .sidebar-nav,.sidebar .conversation-search,.sidebar .conversation-list,.sidebar .sidebar-footer { overflow-x:hidden; }
