@@ -3831,7 +3831,6 @@ onBeforeUnmount(() => {
 
       <div v-if="!isTimerSession" class="composer-wrap">
         <div class="composer-column">
-          <QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" />
           <NAlert v-if="errorText" type="error" closable class="task-error" @close="errorText = ''">
             {{ errorText }}
           </NAlert>
@@ -3965,6 +3964,7 @@ onBeforeUnmount(() => {
               </div>            </div>
           </div>
         </div>
+        <QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" />
       </div>
     </section>
 
