@@ -59,6 +59,21 @@ function openNew() {
   showModal.value = true
 }
 
+function openNewWithContent(text: string) {
+  editing.value = null
+  form.value = {
+    title: text.slice(0, 20),
+    content: text,
+    agent: props.currentAgent === 'Chat' ? 'Chat' : 'default',
+    model: '',
+    mode: props.currentAgent === 'Chat' ? 'chat' : 'task',
+    autoSend: false,
+  }
+  showModal.value = true
+}
+
+defineExpose({ openNew, openNewWithContent })
+
 function openEdit(cmd: QuickCommand) {
   editing.value = cmd
   form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend }

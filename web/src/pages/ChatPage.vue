@@ -273,6 +273,7 @@ const actionLabels = computed(() => ({
   cancel: locale.value === 'zh' ? '取消' : locale.value === 'ja' ? 'キャンセル' : 'Cancel',
   preview: locale.value === 'zh' ? '预览' : locale.value === 'ja' ? 'プレビュー' : 'Preview',
   deleteMessage: locale.value === 'zh' ? '删除该消息' : locale.value === 'ja' ? 'このメッセージを削除' : 'Delete message',
+  addToQuickCommand: locale.value === 'zh' ? '添加至快捷指令' : locale.value === 'ja' ? 'クイックコマンドに追加' : 'Add to quick command',
   editLocalOnly: locale.value === 'zh' ? '已更新展示内容（未找到上下文记录，真实上下文未变）' : locale.value === 'ja' ? '表示内容を更新しました（コンテキスト記録が見つからず、実際のコンテキストは変更されていません）' : 'Display updated (no context record found; real context unchanged)',
   deleteLocalOnly: locale.value === 'zh' ? '已删除展示消息（未找到上下文记录，真实上下文未变）' : locale.value === 'ja' ? '表示メッセージを削除しました（コンテキスト記録が見つからず、実際のコンテキストは変更されていません）' : 'Display message deleted (no context record found; real context unchanged)',
   skills: locale.value === 'zh' ? '技能' : locale.value === 'ja' ? 'スキル' : 'Skills',
@@ -2592,6 +2593,12 @@ async function onQuickCommand(cmd: any) {
   nextTick(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus())
 }
 
+const qcBar = ref<any>(null)
+function addQuickCommandFromMessage(item: any) {
+  openMenuId.value = ''
+  qcBar.value?.openNewWithContent(item.text)
+}
+
 async function submitPrompt() {
   const text = input.value.trim()
   if ((!text && !attachments.value.length && !screenShareActive.value) || isRunning.value || isUploading.value) return
@@ -3761,6 +3768,9 @@ onBeforeUnmount(() => {
                     {{ actionLabels.more }}
                   </NTooltip>
                   <div v-if="openMenuId === item.id" class="message-menu">
+                    <button type="button" class="message-menu-item" @click="addQuickCommandFromMessage(item)">
+                      <NIcon :component="SparklesOutline" />{{ actionLabels.addToQuickCommand }}
+                    </button>
                     <button type="button" class="message-menu-item" @click="deleteMessage(item)">
                       <NIcon :component="TrashOutline" />{{ actionLabels.deleteMessage }}
                     </button>
@@ -3967,7 +3977,7 @@ onBeforeUnmount(() => {
               </div>            </div>
           </div>
         </div>
-        <div v-if="!activeConversationId" class="composer-column"><QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" /></div>
+        <div v-if="!activeConversationId" class="composer-column"><QuickCommandBar ref="qcBar" :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" /></div>
       </div>
     </section>
 
