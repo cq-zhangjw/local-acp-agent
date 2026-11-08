@@ -412,13 +412,39 @@ function isAssistantRunning(item: AssistantMessage) {
 }
 /** Done 消息：是否包含 thought/tool/plan 步骤（需要折叠）。 */
 function hasProcessSegments(item: AssistantMessage) {
-  return (item.segments || []).some((s: any) => s.type === 'thought' || s.type === 'tool' || s.type === 'plan')
+  const segs = item.segments || []
+  // Any thought/tool/plan, OR any text that appears before the last "final" text block.
+  if (segs.some((s: any) => s.type === 'thought' || s.type === 'tool' || s.type === 'plan')) return true
+  // If there are 2+ text segments, earlier ones are process narration.
+  return segs.filter((s: any) => s.type === 'text').length > 1
 }
 function processStepCount(item: AssistantMessage) {
-  return (item.segments || []).filter((s: any) => s.type === 'thought' || s.type === 'tool' || s.type === 'plan').length
+  const segs = item.segments || []
+  const nonText = segs.filter((s: any) => s.type !== 'text').length
+  const textCount = segs.filter((s: any) => s.type === 'text').length
+  // Count non-text steps + earlier text narration (all but the last text).
+  return nonText + Math.max(0, textCount - 1)
 }
-function textSegments(item: AssistantMessage) {
-  return (item.segments || []).filter((s: any) => s.type === 'text')
+/** Final answer = trailing text blocks after the last thought/tool/plan.
+ *  Earlier text blocks (process narration like "let me try another query")
+ *  go into the folded process area. */
+function finalTextSegments(item: AssistantMessage) {
+  const segs = item.segments || []
+  let lastProcessIdx = -1
+  for (let i = segs.length - 1; i >= 0; i--) {
+    if (segs[i].type !== 'text') { lastProcessIdx = i; break }
+  }
+  // Text blocks after the last process step = final answer.
+  return segs.slice(lastProcessIdx + 1).filter((s: any) => s.type === 'text')
+}
+/** Everything that goes inside the folded process area. */
+function processSegments(item: AssistantMessage) {
+  const segs = item.segments || []
+  let lastProcessIdx = -1
+  for (let i = segs.length - 1; i >= 0; i--) {
+    if (segs[i].type !== 'text') { lastProcessIdx = i; break }
+  }
+  return segs.slice(0, lastProcessIdx + 1)
 }
 /** 空会话默认标题按当前语言显示（兼容历史数据里写死的 中/英/日「新建会话」）。 */
 function displayTitle(title: string): string {
@@ -3810,14 +3836,15 @@ onBeforeUnmount(() => {
                       <template #header>
                         <span class="process-collapse__header">🔧 {{ processStepCount(item) }} 步推理过程（点击展开）</span>
                       </template>
-                      <template v-for="segment in item.segments" :key="segment.id">
-                        <ThoughtCard v-if="segment.type === 'thought' && segment.text.trim().length > 0" :text="segment.text" :done="true" />
+                      <template v-for="segment in processSegments(item)" :key="segment.id">
+                        <MarkdownMessage v-if="segment.type === 'text'" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
+                        <ThoughtCard v-else-if="segment.type === 'thought' && segment.text.trim().length > 0" :text="segment.text" :done="true" />
                         <ExecutionProcess v-else-if="segment.type === 'plan'" :process="item.process" :todo-items="currentTodoItems" />
                         <ToolCallCard v-else-if="segment.type === 'tool'" :tool="segmentTool(item, segment)" @open-file="openFilePreview" />
                       </template>
                     </NCollapseItem>
                   </NCollapse>
-                  <MarkdownMessage v-for="segment in textSegments(item)" :key="segment.id" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
+                  <MarkdownMessage v-for="segment in finalTextSegments(item)" :key="segment.id" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
                 </template>
                 <span v-if="isAssistantRunning(item)" class="msg-loader" aria-label="loading" />
                 <div v-if="!isRunning && item.status !== 'pending'" class="message-actions">
