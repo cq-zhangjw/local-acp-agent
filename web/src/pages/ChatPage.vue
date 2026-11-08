@@ -410,6 +410,16 @@ function isAssistantRunning(item: AssistantMessage) {
   return item.role === 'assistant'
     && (item.status === 'pending' || item.status === 'streaming' || item.status === 'waiting_permission')
 }
+/** Done 消息：是否包含 thought/tool/plan 步骤（需要折叠）。 */
+function hasProcessSegments(item: AssistantMessage) {
+  return (item.segments || []).some((s: any) => s.type === 'thought' || s.type === 'tool' || s.type === 'plan')
+}
+function processStepCount(item: AssistantMessage) {
+  return (item.segments || []).filter((s: any) => s.type === 'thought' || s.type === 'tool' || s.type === 'plan').length
+}
+function textSegments(item: AssistantMessage) {
+  return (item.segments || []).filter((s: any) => s.type === 'text')
+}
 /** 空会话默认标题按当前语言显示（兼容历史数据里写死的 中/英/日「新建会话」）。 */
 function displayTitle(title: string): string {
   const n = (title || '').trim()
@@ -3785,11 +3795,29 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <template v-else>
-                <template v-for="segment in item.segments" :key="segment.id">
-                  <MarkdownMessage v-if="segment.type === 'text'" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
-                  <ThoughtCard v-else-if="segment.type === 'thought' && segment.text.trim().length > 0" :text="segment.text" :done="segment.done" />
-                  <ExecutionProcess v-else-if="segment.type === 'plan'" :process="item.process" :todo-items="currentTodoItems" />
-                  <ToolCallCard v-else-if="segment.type === 'tool'" :tool="segmentTool(item, segment)" @open-file="openFilePreview" />
+                <!-- Running: live show. Done: collapse thought/tool/plan into one fold. -->
+                <template v-if="isAssistantRunning(item)">
+                  <template v-for="segment in item.segments" :key="segment.id">
+                    <MarkdownMessage v-if="segment.type === 'text'" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
+                    <ThoughtCard v-else-if="segment.type === 'thought' && segment.text.trim().length > 0" :text="segment.text" :done="segment.done" />
+                    <ExecutionProcess v-else-if="segment.type === 'plan'" :process="item.process" :todo-items="currentTodoItems" />
+                    <ToolCallCard v-else-if="segment.type === 'tool'" :tool="segmentTool(item, segment)" @open-file="openFilePreview" />
+                  </template>
+                </template>
+                <template v-else>
+                  <NCollapse v-if="hasProcessSegments(item)" class="process-collapse">
+                    <NCollapseItem name="process">
+                      <template #header>
+                        <span class="process-collapse__header">🔧 {{ processStepCount(item) }} 步推理过程（点击展开）</span>
+                      </template>
+                      <template v-for="segment in item.segments" :key="segment.id">
+                        <ThoughtCard v-if="segment.type === 'thought' && segment.text.trim().length > 0" :text="segment.text" :done="true" />
+                        <ExecutionProcess v-else-if="segment.type === 'plan'" :process="item.process" :todo-items="currentTodoItems" />
+                        <ToolCallCard v-else-if="segment.type === 'tool'" :tool="segmentTool(item, segment)" @open-file="openFilePreview" />
+                      </template>
+                    </NCollapseItem>
+                  </NCollapse>
+                  <MarkdownMessage v-for="segment in textSegments(item)" :key="segment.id" class="assistant-content" :content="segment.text" :html="segment.html" @open-file="openFilePreview" />
                 </template>
                 <span v-if="isAssistantRunning(item)" class="msg-loader" aria-label="loading" />
                 <div v-if="!isRunning && item.status !== 'pending'" class="message-actions">
@@ -4534,6 +4562,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.process-collapse { margin: 8px 0 12px; background:#f8fafc; border:1px solid #e4e8ee; border-radius:10px; }
+.process-collapse :deep(.n-collapse-item__header) { padding:8px 14px; font-size:12px; color:#64748b; }
+.process-collapse__header { font-size:12px; color:#64748b; }
+
 .chat-app { --canvas:#f7f8fa; --surface:#fff; --muted:#f1f4f8; --border:#e4e8ee; --text:#1d2733; --subtle:#6b7785; height:100vh; height:100dvh; display:flex; overflow:hidden; background:var(--canvas); color:var(--text); }
 .sidebar { width:284px; flex:0 0 284px; height:100%; min-height:0; display:flex; flex-direction:column; padding:18px 14px 14px; background:var(--surface); border-right:1px solid var(--border); overflow:hidden; overflow-x:hidden; } .sidebar .brand-row,.sidebar .sidebar-nav,.sidebar .conversation-search,.sidebar .conversation-list,.sidebar .sidebar-footer { overflow-x:hidden; }
 .brand-row { display:flex; gap:10px; align-items:center; padding:0 10px 14px; } .brand-row strong { display:block; font-size:15px; } .brand-row span { display:block; margin-top:2px; color:var(--subtle); font-size:11px; } .sidebar-collapse-btn { margin-left:auto; } .sidebar-expand-btn { display:none; } .chat-app--collapsed .sidebar { width:0; flex:0 0 0; padding:0; overflow:hidden; border-right:0; } .mobile-menu { display:none; }
