@@ -3964,7 +3964,7 @@ onBeforeUnmount(() => {
               </div>            </div>
           </div>
         </div>
-        <QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" />
+        <div class="composer-column"><QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" /></div>
       </div>
     </section>
 
