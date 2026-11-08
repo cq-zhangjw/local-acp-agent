@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { NModal, NButton, NInput, NSelect, NSwitch, NTag } from 'naive-ui'
 
 interface QuickCommand {
@@ -27,6 +27,23 @@ const list = ref<QuickCommand[]>([])
 const showModal = ref(false)
 const editing = ref<QuickCommand | null>(null)
 const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false })
+
+// Task mode: can't pick the lightweight Chat agent. Chat mode: agent is Chat, model locked.
+const agentOptions = computed(() => {
+  const opts = props.agents.map(a => ({ label: a.name, value: a.name }))
+  if (form.value.mode === 'task') return opts.filter(o => o.value !== 'Chat')
+  return opts
+})
+const modelOptions = computed(() => [{ label: '默认', value: '' }, ...props.models.map(m => ({ label: m.model_name, value: m.model_name }))])
+
+function onModeChange(mode: string) {
+  if (mode === 'chat') {
+    form.value.agent = 'Chat'
+    form.value.model = ''
+  } else if (form.value.agent === 'Chat') {
+    form.value.agent = 'default'
+  }
+}
 
 async function load() {
   try {
@@ -100,6 +117,8 @@ onMounted(load)
 
     <NModal v-model:show="showModal" preset="card" style="width:520px" :title="editing ? '编辑快捷指令' : '新建快捷指令'">
       <div class="qc-form">
+        <label>模式</label>
+        <NSelect v-model:value="form.mode" :options="[{ label: 'Chat（轻量对话，锁默认模型）', value: 'chat' }, { label: 'Task（完整 Agent 工作区）', value: 'task' }]" @update:value="onModeChange" />
         <label>标题</label>
         <NInput v-model:value="form.title" placeholder="如：分析项目结构" maxlength="30" show-count />
         <label>指令内容</label>
@@ -107,18 +126,14 @@ onMounted(load)
         <div class="qc-row">
           <div class="qc-col">
             <label>Agent</label>
-            <NSelect v-model:value="form.agent" :options="agents.map(a => ({ label: a.name, value: a.name }))" />
+            <NSelect v-model:value="form.agent" :options="agentOptions" />
           </div>
           <div class="qc-col">
-            <label>模型</label>
-            <NSelect v-model:value="form.model" :options="[{ label: '默认', value: '' }, ...models.map(m => ({ label: m.model_name, value: m.model_name }))]" />
+            <label>模型{{ form.mode === 'chat' ? '（Chat 模式锁默认）' : '' }}</label>
+            <NSelect v-model:value="form.model" :options="modelOptions" :disabled="form.mode === 'chat'" />
           </div>
         </div>
         <div class="qc-row">
-          <div class="qc-col">
-            <label>模式</label>
-            <NSelect v-model:value="form.mode" :options="[{ label: 'Chat', value: 'chat' }, { label: 'Task', value: 'task' }]" />
-          </div>
           <div class="qc-col qc-col-switch">
             <label>自动发送</label>
             <NSwitch v-model:value="form.autoSend" size="small" />

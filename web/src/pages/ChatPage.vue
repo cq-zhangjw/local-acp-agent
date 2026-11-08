@@ -2579,6 +2579,9 @@ async function sendAgentPrompt(
 
 /** Quick command card clicked: switch agent/model/mode, then fill input (or auto-send). */
 async function onQuickCommand(cmd: any) {
+  if (cmd.mode && cmd.mode !== toolbarChatMode.value && !activeConversationId.value) {
+    setInitialMode(cmd.mode)
+  }
   if (cmd.agent && cmd.agent !== currentAgentName.value) selectAgent(cmd.agent)
   if (cmd.model && cmd.model !== currentModel.value) {
     currentModel.value = cmd.model
@@ -3964,7 +3967,7 @@ onBeforeUnmount(() => {
               </div>            </div>
           </div>
         </div>
-        <div class="composer-column"><QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" /></div>
+        <div v-if="!activeConversationId" class="composer-column"><QuickCommandBar :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" /></div>
       </div>
     </section>
 
