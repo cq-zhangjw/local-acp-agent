@@ -1,0 +1,69 @@
+{
+  "environment": {
+    "fastmcp": "4.1.0",
+    "mcp": "2.3.0"
+  },
+  "serverInfo": {
+    "name": "web_search_server",
+    "title": null,
+    "version": "4.1.0",
+    "description": null,
+    "websiteUrl": null,
+    "icons": null
+  },
+  "instructions": null,
+  "capabilities": {},
+  "tools": [
+    {
+      "name": "search_web",
+      "title": "Search Web",
+      "description": "Search the web via headless browser scraping (Bing CN or Baidu).\n\nFree, no API key. Returns up to max_results entries with title/url/snippet.\nUse this when the user asks for up-to-date info, news, or anything beyond\nyour training cutoff. Bing is default (less anti-bot); switch to \"baidu\"\nif Bing results are insufficient for Chinese queries.",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "search keywords, e.g. \"2026年最新 AI Agent 框架对比\""
+          },
+          "engine": {
+            "default": "bing",
+            "type": "string",
+            "description": "\"bing\" (default, cn.bing.com) or \"baidu\""
+          },
+          "max_results": {
+            "default": 8,
+            "type": "integer",
+            "description": "number of results to return (default 8, max 15)"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    }
+  ],
+  "prompts": [],
+  "resources": [],
+  "resourceTemplates": []
+}
