@@ -4593,7 +4593,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .process-collapse { margin: 2px 0 10px; background:transparent; border:none; border-radius:0; }
-.process-collapse :deep(.n-collapse-item__header) { padding:2px 0; font-size:11.5px; color:#94a3b8; line-height:1.5; height:auto; min-height:auto; }
+.process-collapse :deep(.n-collapse-item__header) { padding:10px !important; font-size:11.5px; color:#94a3b8; line-height:1.5; }
 .process-collapse :deep(.n-collapse-item__header:hover) { color:#64748b; }
 .process-collapse :deep(.n-collapse-item__header .n-collapse-item__header-arrow) { font-size:12px; margin-right:4px; }
 .process-collapse :deep(.n-collapse-item__content) { padding-top:6px; }
