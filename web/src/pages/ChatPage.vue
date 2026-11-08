@@ -4601,6 +4601,7 @@ onBeforeUnmount(() => {
 .process-collapse__header { font-size:11.5px; color:#94a3b8; }
 .process-collapse :deep(.tool-call-collapse) { margin:6px 0; }
 .process-collapse :deep(.tool-call-collapse .n-collapse-item__header) { padding:10px 14px; }
+.process-collapse :deep(.n-collapse .n-collapse-item .n-collapse-item) { margin-left:0; }
 .process-collapse :deep(.thought-card) { margin:6px 0; }
 
 .chat-app { --canvas:#f7f8fa; --surface:#fff; --muted:#f1f4f8; --border:#e4e8ee; --text:#1d2733; --subtle:#6b7785; height:100vh; height:100dvh; display:flex; overflow:hidden; background:var(--canvas); color:var(--text); }
