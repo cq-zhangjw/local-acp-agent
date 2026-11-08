@@ -30,6 +30,7 @@ import {
   SparklesOutline,
   GitNetworkOutline,
   ReaderOutline,
+  GlobeOutline,
   StopOutline,
   StopCircleOutline,
   TrashOutline,
@@ -292,6 +293,7 @@ const actionLabels = computed(() => ({
   knowledgeNormal: locale.value === 'zh' ? '普通' : locale.value === 'ja' ? '通常' : 'Normal',
   chatMode: locale.value === 'zh' ? 'Chat 聊天' : locale.value === 'ja' ? 'チャット' : 'Chat',
   historyOn: locale.value === 'zh' ? '历史上下文' : locale.value === 'ja' ? '履歴コンテキスト' : 'History context',
+  webSearch: locale.value === 'zh' ? '联网搜索' : locale.value === 'ja' ? 'ウェブ検索' : 'Web search',
   historyOff: locale.value === 'zh' ? '单轮问答' : locale.value === 'ja' ? '単発Q&A' : 'Single-turn',
   taskMode: locale.value === 'zh' ? 'Agent 任务' : locale.value === 'ja' ? 'エージェントタスク' : 'Agent task',
   chatModeDesc: locale.value === 'zh' ? '轻量聊天，不加载工具与技能' : locale.value === 'ja' ? 'ツールやスキルなしの軽量チャット' : 'Lightweight chat without tools or skills',
@@ -1010,6 +1012,10 @@ const MODEL_STORAGE_KEY = 'chat_model'
 /** 历史上下文偏好：浏览器存储（true=携带完整历史；false=每次只带当前这一条消息）。 */
 const HISTORY_STORAGE_KEY = 'chat_history_on'
 const historyOn = ref(localStorage.getItem(HISTORY_STORAGE_KEY) !== 'false') // 默认开（现状行为）
+
+/** 联网搜索开关（仅 Chat 模式）：开启时先搜网再回答。 */
+const WEB_SEARCH_STORAGE_KEY = 'chat_web_search_on'
+const webSearchOn = ref(localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true')
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
@@ -2103,7 +2109,8 @@ function websocketUrl() {
   const agent = currentAgentName.value || 'default'
   const model = currentModel.value || ''
   const modelParam = model ? `&model=${encodeURIComponent(model)}` : ''
-  return `${protocol}//${window.location.host}/acp-ws?agent=${encodeURIComponent(agent)}${modelParam}`
+  const wsParam = (webSearchOn.value && agent === 'Chat') ? '&web_search=1' : ''
+  return `${protocol}//${window.location.host}/acp-ws?agent=${encodeURIComponent(agent)}${modelParam}${wsParam}`
 }
 
 function connect() {
@@ -3928,6 +3935,21 @@ onBeforeUnmount(() => {
                       </NButton>
                     </template>
                     {{ historyOn ? actionLabels.historyOn : actionLabels.historyOff }}
+                  </NTooltip>
+                  <NTooltip v-if="toolbarChatMode">
+                    <template #trigger>
+                      <NButton
+                        quaternary size="small"
+                        class="toolbar-pill"
+                        :class="{ 'toolbar-pill--on': webSearchOn }"
+                        :aria-label="actionLabels.webSearch"
+                        @click="webSearchOn = !webSearchOn; localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(webSearchOn))"
+                      >
+                        <template #icon><NIcon :component="GlobeOutline" /></template>
+                        {{ actionLabels.webSearch }}
+                      </NButton>
+                    </template>
+                    {{ actionLabels.webSearch }}
                   </NTooltip>
                 </template>
               </div>

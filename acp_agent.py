@@ -360,16 +360,39 @@ def build_agent(
         # Chat-only agent: no MCP tools / subagents / skills — a lightweight
         # conversational model with no local file or shell access.
         chat_backend = StateBackend()
+        chat_tools = []
+        chat_system_prompt = f"{get_system_prompt('Chat')}\n\n"
+        # Optional web search (toggled from the composer): inject the
+        # web_search_server MCP tool and instruct the model to search first.
+        if os.getenv("WEB_SEARCH", "").strip() == "1":
+            try:
+                from utils.mcp_loader import _holder, make_tool, load_agents_config
+                cfg = load_agents_config()
+                ws_entry = next(
+                    (e for e in (cfg.get("default", {}).get("tools", {}).get("mcp_tools") or []) if e.get("server") == "web_search_server"),
+                    None,
+                )
+                if ws_entry:
+                    holder = _holder("web_search_server")
+                    for tm in ws_entry.get("tools") or []:
+                        chat_tools.append(make_tool(holder, tm))
+                    chat_system_prompt += (
+                        "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
+                        "先用 search_web 工具把问题转成关键词搜索（中文问题用中文关键词），"
+                        "阅读搜索结果后再回答；如果结果不够，换关键词或换 engine=baidu 再搜一次。"
+                        "回答时引用来源 URL。\n\n"
+                    )
+            except Exception as e:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning("web_search inject failed: %s", e)
         agent = create_deep_agent(
             model=create_model(),
-            tools=[],
+            tools=chat_tools,
             subagents=None,
             skills=[],
             checkpointer=checkpointer,
             backend=chat_backend,
-            system_prompt=(
-                f"{get_system_prompt('Chat')}\n\n"
-            ),
+            system_prompt=chat_system_prompt,
         )
         return agent
 

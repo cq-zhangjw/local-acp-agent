@@ -433,6 +433,9 @@ async def acp_bridge(websocket: WebSocket):
     model_name = websocket.query_params.get("model", "") or ""
     if model_name:
         agent_env["MODEL_NAME"] = model_name
+    web_search = websocket.query_params.get("web_search", "") or ""
+    if web_search:
+        agent_env["WEB_SEARCH"] = web_search
     proc = await asyncio.create_subprocess_exec(
         *AGENT_CMD,
         stdin=subprocess.PIPE,
