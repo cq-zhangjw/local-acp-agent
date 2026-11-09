@@ -67,7 +67,7 @@ async function load() {
 
 function openNew() {
   editing.value = null
-  form.value = { title: '', content: '', agent: props.currentAgent, model: props.currentModel, mode: 'task', autoSend: false, role: '', webSearchOn: true, historyOn: true }
+  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true }
   showModal.value = true
 }
 
