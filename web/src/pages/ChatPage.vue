@@ -4086,7 +4086,7 @@ onBeforeUnmount(() => {
                         {{ systemOverrideName || '角色预设' }}
                       </NButton>
                     </template>
-                    <NModal preset="card" style="width:640px" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
+                    <NModal preset="card" style="width:80vw;max-width:900px" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
                       <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
                       <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:400px;overflow-y:auto;">
                         <div class="qc-card qc-new" @click="qcBar?.openNew(); showRolePresets = false">
@@ -4096,6 +4096,13 @@ onBeforeUnmount(() => {
                         <div v-for="c in filteredRoles" :key="c.id" class="qc-card" :class="{ 'qc-card--active': c.title === systemOverrideName }" @click="chooseRole(c)">
                           <div class="qc-title">{{ c.title }}</div>
                           <div class="qc-preview">{{ c.content }}</div>
+                          <div class="qc-tags">
+                            <span class="qc-tag">{{ c.agent }}</span>
+                            <span v-if="c.model" class="qc-tag qc-tag--info">{{ c.model }}</span>
+                            <span class="qc-tag" :class="c.mode === 'chat' ? 'qc-tag--green' : 'qc-tag--orange'">{{ c.mode === 'chat' ? 'Chat' : 'Task' }}</span>
+                            <span v-if="c.webSearchOn" class="qc-tag">🌐</span>
+                            <span v-if="c.historyOn" class="qc-tag">📜</span>
+                          </div>
                         </div>
                       </div>
                       <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
@@ -4694,6 +4701,11 @@ onBeforeUnmount(() => {
 .qc-card.qc-new { display:flex; flex-direction:column; align-items:center; justify-content:center; border-style:dashed; color:#94a3b8; }
 .qc-new-plus { font-size:20px; }
 .qc-new-label { font-size:12px; margin-top:4px; }
+.qc-tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
+.qc-tag { font-size:10px; padding:1px 6px; border-radius:4px; background:#f1f5f9; color:#64748b; }
+.qc-tag--info { background:#eff6ff; color:#2563eb; }
+.qc-tag--green { background:#f0fdf4; color:#16a34a; }
+.qc-tag--orange { background:#fff7ed; color:#ea580c; }
 .role-item { padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; transition:all .15s; }
 .role-item:hover { border-color:#2563eb; background:#eff6ff; }
 .role-item--active { border-color:#2563eb; background:#eff6ff; }
