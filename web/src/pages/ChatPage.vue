@@ -4085,7 +4085,7 @@ onBeforeUnmount(() => {
                     <template #icon><NIcon :component="PersonCircleOutline" /></template>
                     {{ systemOverrideName || '角色预设' }}
                   </NButton>
-                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;max-width:900px" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
+                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;height:80vh;max-width:900px" :bordered="false" :mask-closable="false" :close-on-esc="true" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
                     <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
                     <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto;">
                       <div class="qc-card qc-new" @click="qcBar?.openNew(); showRolePresets = false">
