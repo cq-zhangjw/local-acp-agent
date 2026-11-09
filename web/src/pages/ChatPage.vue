@@ -1074,6 +1074,12 @@ const systemOverride = ref('')
 const systemOverrideName = ref('')
 const showRolePresets = ref(false)
 const systemCommands = ref<any[]>([])
+const roleSearch = ref('')
+const filteredRoles = computed(() => {
+  if (!roleSearch.value) return systemCommands.value
+  const q = roleSearch.value.toLowerCase()
+  return systemCommands.value.filter((c: any) => c.title.toLowerCase().includes(q) || c.content.toLowerCase().includes(q))
+})
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
@@ -4068,7 +4074,7 @@ onBeforeUnmount(() => {
                     </template>
                     {{ actionLabels.webSearch }}
                   </NTooltip>
-                  <NPopover v-if="toolbarChatMode" trigger="click" :show="showRolePresets" @update:show="showRolePresets = $event" placement="top" :show-arrow="false" style="width:320px">
+                  <NPopover v-if="toolbarChatMode" trigger="click" :show="showRolePresets" @update:show="showRolePresets = $event" placement="top" :show-arrow="false" style="width:auto">
                     <template #trigger>
                       <NButton
                         quaternary size="small"
@@ -4080,14 +4086,20 @@ onBeforeUnmount(() => {
                         {{ systemOverrideName || '角色预设' }}
                       </NButton>
                     </template>
-                    <div class="role-pop">
-                      <div v-if="!systemCommands.length" style="padding:12px;color:#94a3b8;font-size:13px;">暂无角色预设，在欢迎页新建快捷指令并选"设为系统提示词"类型</div>
-                      <div v-for="c in systemCommands" :key="c.id" class="role-item" :class="{ 'role-item--active': c.title === systemOverrideName }" @click="chooseRole(c)">
-                        <div style="font-size:13px;font-weight:500;">{{ c.title }}</div>
-                        <div style="font-size:11px;color:#94a3b8;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ c.content }}</div>
+                    <NModal preset="card" style="width:640px" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
+                      <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
+                      <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:400px;overflow-y:auto;">
+                        <div class="qc-card qc-new" style="flex:0 0 180px;min-height:90px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;" @click="qcBar?.openNew(); showRolePresets = false">
+                          <span style="font-size:20px;color:#94a3b8;">＋</span>
+                          <span style="font-size:12px;color:#64748b;margin-top:4px;">新建角色</span>
+                        </div>
+                        <div v-for="c in filteredRoles" :key="c.id" class="qc-card" :style="{ flex: '0 0 180px', minHeight: '90px', cursor: 'pointer', border: c.title === systemOverrideName ? '2px solid #2563eb' : '1px solid #e2e8f0', background: c.title === systemOverrideName ? '#eff6ff' : '#fff' }" @click="chooseRole(c)">
+                          <div style="font-size:13px;font-weight:500;">{{ c.title }}</div>
+                          <div style="font-size:11px;color:#94a3b8;margin-top:4px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">{{ c.content }}</div>
+                        </div>
                       </div>
-                      <div v-if="systemOverrideName" class="role-clear" @click="clearRole">清除角色预设</div>
-                    </div>
+                      <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
+                    </NModal>
                   </NPopover>
                 </template>
               </div>
