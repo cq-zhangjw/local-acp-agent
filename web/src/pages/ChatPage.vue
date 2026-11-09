@@ -4167,8 +4167,10 @@ onBeforeUnmount(() => {
                       </div>
                     </div>
                     <template #footer>
-                      <NButton size="small" style="margin-right:8px;" @click="showRoleEditor = false">取消</NButton>
-                      <NButton size="small" type="primary" @click="saveRole">保存</NButton>
+                      <div style="text-align:right;">
+                        <NButton size="small" style="margin-right:8px;" @click="showRoleEditor = false">取消</NButton>
+                        <NButton size="small" type="primary" @click="saveRole">保存</NButton>
+                      </div>
                     </template>
                   </NModal>
                 </template>
