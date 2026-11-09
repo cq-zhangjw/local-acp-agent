@@ -4074,40 +4074,38 @@ onBeforeUnmount(() => {
                     </template>
                     {{ actionLabels.webSearch }}
                   </NTooltip>
-                  <NPopover v-if="toolbarChatMode" trigger="click" :show="showRolePresets" @update:show="showRolePresets = $event" placement="top" :show-arrow="false" style="width:auto">
-                    <template #trigger>
-                      <NButton
-                        quaternary size="small"
-                        class="toolbar-pill"
-                        :class="{ 'toolbar-pill--on': !!systemOverrideName }"
-                        aria-label="角色预设"
-                      >
-                        <template #icon><NIcon :component="PersonCircleOutline" /></template>
-                        {{ systemOverrideName || '角色预设' }}
-                      </NButton>
-                    </template>
-                    <NModal preset="card" style="width:80vw;max-width:900px" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
-                      <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
-                      <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:400px;overflow-y:auto;">
-                        <div class="qc-card qc-new" @click="qcBar?.openNew(); showRolePresets = false">
-                          <span class="qc-new-plus">＋</span>
-                          <span class="qc-new-label">新建角色</span>
-                        </div>
-                        <div v-for="c in filteredRoles" :key="c.id" class="qc-card" :class="{ 'qc-card--active': c.title === systemOverrideName }" @click="chooseRole(c)">
-                          <div class="qc-title">{{ c.title }}</div>
-                          <div class="qc-preview">{{ c.content }}</div>
-                          <div class="qc-tags">
-                            <span class="qc-tag">{{ c.agent }}</span>
-                            <span v-if="c.model" class="qc-tag qc-tag--info">{{ c.model }}</span>
-                            <span class="qc-tag" :class="c.mode === 'chat' ? 'qc-tag--green' : 'qc-tag--orange'">{{ c.mode === 'chat' ? 'Chat' : 'Task' }}</span>
-                            <span v-if="c.webSearchOn" class="qc-tag">🌐</span>
-                            <span v-if="c.historyOn" class="qc-tag">📜</span>
-                          </div>
+                  <NButton
+                    v-if="toolbarChatMode"
+                    quaternary size="small"
+                    class="toolbar-pill"
+                    :class="{ 'toolbar-pill--on': !!systemOverrideName }"
+                    aria-label="角色预设"
+                    @click="showRolePresets = true"
+                  >
+                    <template #icon><NIcon :component="PersonCircleOutline" /></template>
+                    {{ systemOverrideName || '角色预设' }}
+                  </NButton>
+                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;max-width:900px" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
+                    <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
+                    <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto;">
+                      <div class="qc-card qc-new" @click="qcBar?.openNew(); showRolePresets = false">
+                        <span class="qc-new-plus">＋</span>
+                        <span class="qc-new-label">新建角色</span>
+                      </div>
+                      <div v-for="c in filteredRoles" :key="c.id" class="qc-card" :class="{ 'qc-card--active': c.title === systemOverrideName }" @click="chooseRole(c)">
+                        <div class="qc-title">{{ c.title }}</div>
+                        <div class="qc-preview">{{ c.content }}</div>
+                        <div class="qc-tags">
+                          <span class="qc-tag">{{ c.agent }}</span>
+                          <span v-if="c.model" class="qc-tag qc-tag--info">{{ c.model }}</span>
+                          <span class="qc-tag" :class="c.mode === 'chat' ? 'qc-tag--green' : 'qc-tag--orange'">{{ c.mode === 'chat' ? 'Chat' : 'Task' }}</span>
+                          <span v-if="c.webSearchOn" class="qc-tag">🌐</span>
+                          <span v-if="c.historyOn" class="qc-tag">📜</span>
                         </div>
                       </div>
-                      <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
-                    </NModal>
-                  </NPopover>
+                    </div>
+                    <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
+                  </NModal>
                 </template>
               </div>
               <div class="composer-toolbar-right">
