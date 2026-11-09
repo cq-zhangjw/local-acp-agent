@@ -132,6 +132,8 @@ onMounted(load)
           <NTag size="tiny" :bordered="false">{{ cmd.agent }}</NTag>
           <NTag v-if="cmd.model" size="tiny" :bordered="false" type="info">{{ cmd.model }}</NTag>
           <NTag size="tiny" :bordered="false" :type="cmd.mode === 'chat' ? 'success' : 'warning'">{{ cmd.mode === 'chat' ? 'Chat' : 'Task' }}</NTag>
+          <NTag v-if="cmd.webSearchOn" size="tiny" :bordered="false" type="info">🌐 搜索</NTag>
+          <NTag v-if="cmd.historyOn" size="tiny" :bordered="false" type="info">📜 历史</NTag>
         </div>
       </div>
     </div>
@@ -188,8 +190,8 @@ onMounted(load)
 .qc-scroll { display:flex; gap:10px; overflow-x:auto; padding-bottom:4px; }
 .qc-scroll::-webkit-scrollbar { height:4px; }
 .qc-scroll::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:2px; }
-.qc-card { flex:0 0 220px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; transition:border-color .15s, box-shadow .15s; }
-.qc-card:hover { border-color:#94a3b8; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.qc-card { flex:0 0 220px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; transition:all .15s; }
+.qc-card:hover { border-color:#2563eb; background:#eff6ff; }
 .qc-new { border:1.5px dashed #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:90px; color:#94a3b8; }
 .qc-new-plus { font-size:22px; line-height:1; }
 .qc-new-label { font-size:12px; margin-top:4px; }
