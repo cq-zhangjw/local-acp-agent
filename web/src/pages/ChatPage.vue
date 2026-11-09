@@ -31,6 +31,7 @@ import {
   GitNetworkOutline,
   ReaderOutline,
   GlobeOutline,
+  PersonCircleOutline,
   StopOutline,
   StopCircleOutline,
   TrashOutline,
@@ -1058,6 +1059,7 @@ const webSearchOn = ref(localStorage.getItem(WEB_SEARCH_STORAGE_KEY) !== 'false'
 
 /** System-prompt override set by clicking a "system" quick command. Prepended to every prompt until cleared. */
 const systemOverride = ref('')
+const systemOverrideName = ref('')
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
@@ -2641,8 +2643,20 @@ async function onQuickCommand(cmd: any) {
   if (cmd.type === 'system') {
     // System-prompt preset: store as override, don't fill input.
     systemOverride.value = cmd.content
+    systemOverrideName.value = cmd.title
     message.success(`已启用系统预设：${cmd.title}`)
     return
+  }
+  // Apply chat-mode toggles if present
+  if (cmd.mode === 'chat') {
+    if (cmd.webSearchOn !== undefined) {
+      webSearchOn.value = cmd.webSearchOn
+      localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(cmd.webSearchOn))
+    }
+    if (cmd.historyOn !== undefined) {
+      historyOn.value = cmd.historyOn
+      localStorage.setItem(HISTORY_STORAGE_KEY, String(cmd.historyOn))
+    }
   }
   input.value = cmd.content
   if (cmd.autoSend) await submitPrompt()
@@ -4018,6 +4032,20 @@ onBeforeUnmount(() => {
                       </NButton>
                     </template>
                     {{ actionLabels.webSearch }}
+                  </NTooltip>
+                  <NTooltip v-if="systemOverrideName">
+                    <template #trigger>
+                      <NButton
+                        quaternary size="small"
+                        class="toolbar-pill toolbar-pill--on"
+                        :aria-label="systemOverrideName"
+                        @click="systemOverride = ''; systemOverrideName = ''"
+                      >
+                        <template #icon><NIcon :component="PersonCircleOutline" /></template>
+                        {{ systemOverrideName }}
+                      </NButton>
+                    </template>
+                    点击清除角色预设
                   </NTooltip>
                 </template>
               </div>

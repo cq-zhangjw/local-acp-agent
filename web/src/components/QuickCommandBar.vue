@@ -11,6 +11,8 @@ interface QuickCommand {
   mode: string
   autoSend: boolean
   type: string
+  webSearchOn?: boolean
+  historyOn?: boolean
   createdAt: number
 }
 
@@ -27,7 +29,7 @@ const emit = defineEmits<{
 const list = ref<QuickCommand[]>([])
 const showModal = ref(false)
 const editing = ref<QuickCommand | null>(null)
-const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false, type: 'prompt' })
+const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false, type: 'prompt', webSearchOn: true, historyOn: true })
 
 // Task mode: can't pick the lightweight Chat agent. Chat mode: agent is Chat, model locked.
 const agentOptions = computed(() => {
@@ -56,7 +58,7 @@ async function load() {
 
 function openNew() {
   editing.value = null
-  form.value = { title: '', content: '', agent: props.currentAgent, model: props.currentModel, mode: 'task', autoSend: false, type: 'prompt' }
+  form.value = { title: '', content: '', agent: props.currentAgent, model: props.currentModel, mode: 'task', autoSend: false, type: 'prompt', webSearchOn: true, historyOn: true }
   showModal.value = true
 }
 
@@ -70,6 +72,8 @@ function openNewWithContent(text: string) {
     mode: props.currentAgent === 'Chat' ? 'chat' : 'task',
     autoSend: false,
     type: 'prompt',
+    webSearchOn: true,
+    historyOn: true,
   }
   showModal.value = true
 }
@@ -78,7 +82,7 @@ defineExpose({ openNew, openNewWithContent })
 
 function openEdit(cmd: QuickCommand) {
   editing.value = cmd
-  form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend, type: cmd.type || 'prompt' }
+  form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend, type: cmd.type || 'prompt', webSearchOn: cmd.webSearchOn !== false, historyOn: cmd.historyOn !== false }
   showModal.value = true
 }
 
@@ -158,6 +162,18 @@ onMounted(load)
             <NSwitch v-model:value="form.autoSend" size="small" />
           </div>
         </div>
+        <template v-if="form.mode === 'chat'">
+          <div class="qc-row">
+            <div class="qc-col qc-col-switch">
+              <label>联网搜索</label>
+              <NSwitch v-model:value="form.webSearchOn" size="small" />
+            </div>
+            <div class="qc-col qc-col-switch">
+              <label>历史上下文</label>
+              <NSwitch v-model:value="form.historyOn" size="small" />
+            </div>
+          </div>
+        </template>
         <div class="qc-actions-right">
           <NButton @click="showModal = false">取消</NButton>
           <NButton type="primary" @click="save">保存</NButton>

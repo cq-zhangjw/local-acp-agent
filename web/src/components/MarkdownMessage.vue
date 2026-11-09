@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUpdated, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
@@ -249,6 +249,7 @@ async function enhanceMarkdown() {
 
 onMounted(enhanceMarkdown)
 watch(safeHtml, enhanceMarkdown, { flush: 'post' })
+onUpdated(enhanceMarkdown)
 </script>
 
 <template>
