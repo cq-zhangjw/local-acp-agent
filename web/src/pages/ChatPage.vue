@@ -1080,6 +1080,11 @@ const filteredRoles = computed(() => {
   const q = roleSearch.value.toLowerCase()
   return systemCommands.value.filter((c: any) => c.title.toLowerCase().includes(q) || c.content.toLowerCase().includes(q))
 })
+function refreshSystemCommands() {
+  fetch('/api/quick-commands').then(r => r.json()).then(d => {
+    if (d.ok) systemCommands.value = d.items.filter((c: any) => c.type === 'system')
+  }).catch(() => {})
+}
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
@@ -2013,9 +2018,7 @@ function openAgentEdit(item?: any) {
 
 onMounted(() => {
   fetchManageData()
-  fetch('/api/quick-commands').then(r => r.json()).then(d => {
-    if (d.ok) systemCommands.value = d.items.filter((c: any) => c.type === 'system')
-  }).catch(() => {})
+  refreshSystemCommands()
 })
 
 function notifyComingSoon(_feature: string) {
@@ -4088,7 +4091,7 @@ onBeforeUnmount(() => {
                   <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;height:80vh;max-width:900px" :bordered="false" :mask-closable="false" :close-on-esc="true" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
                     <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
                     <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto;">
-                      <div class="qc-card qc-new" @click="qcBar?.openNew(); showRolePresets = false">
+                      <div class="qc-card qc-new" @click="qcBar?.openNewRole(); refreshSystemCommands()">
                         <span class="qc-new-plus">＋</span>
                         <span class="qc-new-label">新建角色</span>
                       </div>

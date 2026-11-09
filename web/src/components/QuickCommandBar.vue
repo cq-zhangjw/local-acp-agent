@@ -62,6 +62,12 @@ function openNew() {
   showModal.value = true
 }
 
+function openNewRole() {
+  editing.value = null
+  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, type: 'system', webSearchOn: true, historyOn: true }
+  showModal.value = true
+}
+
 function openNewWithContent(text: string) {
   editing.value = null
   form.value = {
@@ -78,7 +84,7 @@ function openNewWithContent(text: string) {
   showModal.value = true
 }
 
-defineExpose({ openNew, openNewWithContent })
+defineExpose({ openNew, openNewWithContent, openNewRole })
 
 function openEdit(cmd: QuickCommand) {
   editing.value = cmd
@@ -138,10 +144,10 @@ onMounted(load)
       </div>
     </div>
 
-    <NModal v-model:show="showModal" preset="card" style="width:520px" :title="editing ? '编辑快捷指令' : '新建快捷指令'">
+    <NModal v-model:show="showModal" preset="card" style="width:520px" :mask-closable="false" :title="editing ? '编辑快捷指令' : '新建快捷指令'">
       <div class="qc-form">
         <label>类型</label>
-        <NSelect v-model:value="form.type" :options="[{ label: '发送为消息（填入输入框）', value: 'prompt' }, { label: '设为系统提示词（角色/行为规范）', value: 'system' }]" />
+        <NSelect v-model:value="form.type" :options="[{ label: '发送为消息（填入输入框）', value: 'prompt' }, { label: '设为系统提示词（角色/行为规范）', value: 'system' }]" :disabled="!editing" />
         <label>模式</label>
         <NSelect v-model:value="form.mode" :options="[{ label: 'Chat（轻量对话，锁默认模型）', value: 'chat' }, { label: 'Task（完整 Agent 工作区）', value: 'task' }]" @update:value="onModeChange" />
         <label>标题</label>
