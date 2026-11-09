@@ -2745,7 +2745,6 @@ async function saveRole() {
     body: JSON.stringify({ content: roleEditorContent.value }),
   })
   showRoleEditor.value = false
-  showRolePresets.value = false
   refreshSystemCommands()
   message.success(`角色 ${name} 已保存`)
 }
