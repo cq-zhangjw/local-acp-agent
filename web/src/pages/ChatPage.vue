@@ -4152,9 +4152,9 @@ onBeforeUnmount(() => {
                     <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
                   </NModal>
 
-                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;max-width:1000px;height:80vh;display:flex;flex-direction:column;" :mask-closable="false" title="角色编辑器" :show="showRoleEditor" @update:show="showRoleEditor = $event">
+                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;max-width:1000px;height:80vh;" :mask-closable="false" title="角色编辑器" :show="showRoleEditor" @update:show="showRoleEditor = $event">
                     <NInput v-model:value="roleEditorName" size="small" placeholder="角色名（将作为 .deepagents/roles/<名>.md）" style="margin-bottom:10px" />
-                    <div style="display:flex;gap:12px;flex:1;min-height:0;">
+                    <div style="display:flex;gap:12px;height:calc(80vh - 180px);">
                       <div style="flex:1;display:flex;flex-direction:column;min-width:0;">
                         <div style="font-size:12px;color:#64748b;margin-bottom:4px;">提示词（markdown）</div>
                         <textarea v-model="roleEditorContent" style="flex:1;width:100%;resize:none;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:13px;font-family:inherit;" placeholder="写入角色的 system prompt..."></textarea>
@@ -4166,10 +4166,10 @@ onBeforeUnmount(() => {
                         </div>
                       </div>
                     </div>
-                    <div style="margin-top:12px;text-align:right;flex-shrink:0;">
+                    <template #footer>
                       <NButton size="small" style="margin-right:8px;" @click="showRoleEditor = false">取消</NButton>
                       <NButton size="small" type="primary" @click="saveRole">保存</NButton>
-                    </div>
+                    </template>
                   </NModal>
                 </template>
               </div>
