@@ -1054,7 +1054,7 @@ const historyOn = ref(localStorage.getItem(HISTORY_STORAGE_KEY) !== 'false') // 
 
 /** 联网搜索开关（仅 Chat 模式）：开启时先搜网再回答。 */
 const WEB_SEARCH_STORAGE_KEY = 'chat_web_search_on'
-const webSearchOn = ref(localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true')
+const webSearchOn = ref(localStorage.getItem(WEB_SEARCH_STORAGE_KEY) !== 'false') // 默认开
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
