@@ -156,24 +156,24 @@ onMounted(load)
             <NSelect v-model:value="form.model" :options="modelOptions" :disabled="form.mode === 'chat'" />
           </div>
         </div>
-        <div class="qc-row">
-          <div class="qc-col qc-col-switch">
-            <label>自动发送</label>
-            <NSwitch v-model:value="form.autoSend" size="small" />
-          </div>
-        </div>
         <template v-if="form.mode === 'chat'">
           <div class="qc-row">
-            <div class="qc-col qc-col-switch">
+            <div class="qc-col qc-col-switch-inline">
               <label>联网搜索</label>
               <NSwitch v-model:value="form.webSearchOn" size="small" />
             </div>
-            <div class="qc-col qc-col-switch">
+            <div class="qc-col qc-col-switch-inline">
               <label>历史上下文</label>
               <NSwitch v-model:value="form.historyOn" size="small" />
             </div>
           </div>
         </template>
+        <div class="qc-row">
+          <div class="qc-col qc-col-switch-inline">
+            <label>自动发送</label>
+            <NSwitch v-model:value="form.autoSend" size="small" />
+          </div>
+        </div>
         <div class="qc-actions-right">
           <NButton @click="showModal = false">取消</NButton>
           <NButton type="primary" @click="save">保存</NButton>
@@ -206,5 +206,7 @@ onMounted(load)
 .qc-col { flex:1; }
 .qc-col-switch { display:flex; align-items:center; gap:8px; }
 .qc-col-switch label { margin:0; flex:1; }
+.qc-col-switch-inline { display:flex; align-items:center; gap:6px; }
+.qc-col-switch-inline label { margin:0; }
 .qc-actions-right { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
 </style>
