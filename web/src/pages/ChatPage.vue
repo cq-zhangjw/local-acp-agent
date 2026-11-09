@@ -1072,6 +1072,8 @@ const webSearchOn = ref(localStorage.getItem(WEB_SEARCH_STORAGE_KEY) !== 'false'
 /** System-prompt override set by clicking a "system" quick command. Prepended to every prompt until cleared. */
 const systemOverride = ref('')
 const systemOverrideName = ref('')
+const showRolePresets = ref(false)
+const systemCommands = ref<any[]>([])
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
@@ -2005,6 +2007,9 @@ function openAgentEdit(item?: any) {
 
 onMounted(() => {
   fetchManageData()
+  fetch('/api/quick-commands').then(r => r.json()).then(d => {
+    if (d.ok) systemCommands.value = d.items.filter((c: any) => c.type === 'system')
+  }).catch(() => {})
 })
 
 function notifyComingSoon(_feature: string) {
@@ -2682,6 +2687,18 @@ const qcBar = ref<any>(null)
 function addQuickCommandFromMessage(item: any) {
   openMenuId.value = ''
   qcBar.value?.openNewWithContent(item.text)
+}
+
+function chooseRole(cmd: any) {
+  systemOverride.value = cmd.content
+  systemOverrideName.value = cmd.title
+  showRolePresets.value = false
+  message.success(`已启用角色：${cmd.title}`)
+}
+function clearRole() {
+  systemOverride.value = ''
+  systemOverrideName.value = ''
+  showRolePresets.value = false
 }
 
 async function submitPrompt() {
@@ -4051,20 +4068,27 @@ onBeforeUnmount(() => {
                     </template>
                     {{ actionLabels.webSearch }}
                   </NTooltip>
-                  <NTooltip v-if="systemOverrideName">
+                  <NPopover v-if="toolbarChatMode" trigger="click" :show="showRolePresets" @update:show="showRolePresets = $event" placement="top" :show-arrow="false" style="width:320px">
                     <template #trigger>
                       <NButton
                         quaternary size="small"
-                        class="toolbar-pill toolbar-pill--on"
-                        :aria-label="systemOverrideName"
-                        @click="systemOverride = ''; systemOverrideName = ''"
+                        class="toolbar-pill"
+                        :class="{ 'toolbar-pill--on': !!systemOverrideName }"
+                        aria-label="角色预设"
                       >
                         <template #icon><NIcon :component="PersonCircleOutline" /></template>
-                        {{ systemOverrideName }}
+                        {{ systemOverrideName || '角色预设' }}
                       </NButton>
                     </template>
-                    点击清除角色预设
-                  </NTooltip>
+                    <div class="role-pop">
+                      <div v-if="!systemCommands.length" style="padding:12px;color:#94a3b8;font-size:13px;">暂无角色预设，在欢迎页新建快捷指令并选"设为系统提示词"类型</div>
+                      <div v-for="c in systemCommands" :key="c.id" class="role-item" :class="{ 'role-item--active': c.title === systemOverrideName }" @click="chooseRole(c)">
+                        <div style="font-size:13px;font-weight:500;">{{ c.title }}</div>
+                        <div style="font-size:11px;color:#94a3b8;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ c.content }}</div>
+                      </div>
+                      <div v-if="systemOverrideName" class="role-clear" @click="clearRole">清除角色预设</div>
+                    </div>
+                  </NPopover>
                 </template>
               </div>
               <div class="composer-toolbar-right">
@@ -4649,6 +4673,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .process-collapse { margin: 2px 0 10px; background:transparent; border:none; border-radius:0; }
+.role-pop { display:flex; flex-direction:column; gap:6px; max-height:300px; overflow-y:auto; }
+.role-item { padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; transition:all .15s; }
+.role-item:hover { border-color:#2563eb; background:#eff6ff; }
+.role-item--active { border-color:#2563eb; background:#eff6ff; }
+.role-clear { padding:6px; text-align:center; font-size:12px; color:#ef4444; cursor:pointer; }
 .process-collapse :deep(.n-collapse-item__header) { padding:10px !important; font-size:11.5px; color:#94a3b8; line-height:1.5; }
 .process-collapse :deep(.n-collapse-item__header:hover) { color:#64748b; }
 .process-collapse :deep(.n-collapse-item__header .n-collapse-item__header-arrow) { font-size:12px; margin-right:4px; }
