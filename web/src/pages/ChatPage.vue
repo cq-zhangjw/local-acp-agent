@@ -4089,13 +4089,13 @@ onBeforeUnmount(() => {
                     <NModal preset="card" style="width:640px" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
                       <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
                       <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:400px;overflow-y:auto;">
-                        <div class="qc-card qc-new" style="flex:0 0 180px;min-height:90px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;" @click="qcBar?.openNew(); showRolePresets = false">
-                          <span style="font-size:20px;color:#94a3b8;">＋</span>
-                          <span style="font-size:12px;color:#64748b;margin-top:4px;">新建角色</span>
+                        <div class="qc-card qc-new" @click="qcBar?.openNew(); showRolePresets = false">
+                          <span class="qc-new-plus">＋</span>
+                          <span class="qc-new-label">新建角色</span>
                         </div>
-                        <div v-for="c in filteredRoles" :key="c.id" class="qc-card" :style="{ flex: '0 0 180px', minHeight: '90px', cursor: 'pointer', border: c.title === systemOverrideName ? '2px solid #2563eb' : '1px solid #e2e8f0', background: c.title === systemOverrideName ? '#eff6ff' : '#fff' }" @click="chooseRole(c)">
-                          <div style="font-size:13px;font-weight:500;">{{ c.title }}</div>
-                          <div style="font-size:11px;color:#94a3b8;margin-top:4px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">{{ c.content }}</div>
+                        <div v-for="c in filteredRoles" :key="c.id" class="qc-card" :class="{ 'qc-card--active': c.title === systemOverrideName }" @click="chooseRole(c)">
+                          <div class="qc-title">{{ c.title }}</div>
+                          <div class="qc-preview">{{ c.content }}</div>
                         </div>
                       </div>
                       <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
@@ -4686,6 +4686,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .process-collapse { margin: 2px 0 10px; background:transparent; border:none; border-radius:0; }
 .role-pop { display:flex; flex-direction:column; gap:6px; max-height:300px; overflow-y:auto; }
+.qc-card { flex:0 0 220px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; transition:all .15s; }
+.qc-card:hover { border-color:#2563eb; background:#eff6ff; }
+.qc-card--active { border-color:#2563eb; background:#eff6ff; }
+.qc-card .qc-title { font-size:13px; font-weight:600; }
+.qc-card .qc-preview { font-size:12px; color:#94a3b8; margin-top:4px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.qc-card.qc-new { display:flex; flex-direction:column; align-items:center; justify-content:center; border-style:dashed; color:#94a3b8; }
+.qc-new-plus { font-size:20px; }
+.qc-new-label { font-size:12px; margin-top:4px; }
 .role-item { padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; transition:all .15s; }
 .role-item:hover { border-color:#2563eb; background:#eff6ff; }
 .role-item--active { border-color:#2563eb; background:#eff6ff; }
