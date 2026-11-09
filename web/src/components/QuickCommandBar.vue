@@ -52,7 +52,7 @@ async function load() {
   try {
     const r = await fetch('/api/quick-commands')
     const d = await r.json()
-    if (d.ok) list.value = d.items
+    if (d.ok) list.value = d.items.filter((c: any) => c.type !== 'system')
   } catch {}
 }
 
