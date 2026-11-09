@@ -4141,12 +4141,12 @@ onBeforeUnmount(() => {
                         <span class="qc-new-label">新建角色</span>
                       </div>
                       <div v-for="c in filteredRoles" :key="c.name" class="qc-card" :class="{ 'qc-card--active': c.name === systemOverrideName }" @click="chooseRole(c)">
+                        <span class="qc-actions" @click.stop>
+                          <button class="qc-btn" @click="openRoleEditor(c)">✎</button>
+                          <button class="qc-btn qc-btn-del" @click="deleteRole(c.name)">✕</button>
+                        </span>
                         <div class="qc-title">{{ c.name }}</div>
                         <div class="qc-preview">{{ c.preview }}</div>
-                        <div style="display:flex;gap:6px;margin-top:6px;">
-                          <a style="font-size:11px;color:#2563eb;cursor:pointer;" @click.stop="openRoleEditor(c)">编辑</a>
-                          <a style="font-size:11px;color:#ef4444;cursor:pointer;" @click.stop="deleteRole(c.name)">删除</a>
-                        </div>
                       </div>
                     </div>
                     <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
@@ -4758,9 +4758,13 @@ onBeforeUnmount(() => {
 <style scoped>
 .process-collapse { margin: 2px 0 10px; background:transparent; border:none; border-radius:0; }
 .role-pop { display:flex; flex-direction:column; gap:6px; max-height:300px; overflow-y:auto; }
-.qc-card { flex:0 0 220px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; transition:all .15s; }
+.qc-card { position:relative; flex:0 0 220px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; transition:all .15s; }
 .qc-card:hover { border-color:#2563eb; background:#eff6ff; }
 .qc-card--active { border-color:#2563eb; background:#eff6ff; }
+.qc-actions { position:absolute; top:4px; right:4px; display:none; gap:2px; }
+.qc-card:hover .qc-actions { display:flex; }
+.qc-btn { border:0; background:transparent; cursor:pointer; font-size:11px; color:#64748b; padding:0 2px; }
+.qc-btn-del:hover { color:#ef4444; }
 .qc-card .qc-title { font-size:13px; font-weight:600; }
 .qc-card .qc-preview { font-size:12px; color:#94a3b8; margin-top:4px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 .qc-card.qc-new { display:flex; flex-direction:column; align-items:center; justify-content:center; border-style:dashed; color:#94a3b8; }
