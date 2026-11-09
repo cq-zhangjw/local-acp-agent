@@ -206,7 +206,7 @@ onMounted(load)
 .qc-col { flex:1; }
 .qc-col-switch { display:flex; align-items:center; gap:8px; }
 .qc-col-switch label { margin:0; flex:1; }
-.qc-col-switch-inline { display:flex; align-items:center; gap:6px; }
+.qc-col-switch-inline { display:flex; align-items:center; gap:6px; padding:5px 0; }
 .qc-col-switch-inline label { margin:0; }
 .qc-actions-right { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
 </style>
