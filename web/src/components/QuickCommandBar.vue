@@ -157,13 +157,13 @@ onMounted(() => { load(); loadRoles() })
 
     <NModal v-model:show="showModal" preset="card" style="width:520px" :mask-closable="false" :title="editing ? '编辑快捷指令' : '新建快捷指令'">
       <div class="qc-form">
-        <label>关联角色预设</label>
-        <NSelect v-model:value="form.role" :options="roleOptions" placeholder="不关联" clearable />
-        <label>模式</label>
-        <NSelect v-model:value="form.mode" :options="[{ label: 'Chat（轻量对话，锁默认模型）', value: 'chat' }, { label: 'Task（完整 Agent 工作区）', value: 'task' }]" @update:value="onModeChange" />
         <label>标题</label>
         <NInput v-model:value="form.title" placeholder="如：分析项目结构" maxlength="30" show-count />
-        <label>指令内容</label>
+        <label>模式</label>
+        <NSelect v-model:value="form.mode" :options="[{ label: 'Chat（轻量对话，锁默认模型）', value: 'chat' }, { label: 'Task（完整 Agent 工作区）', value: 'task' }]" @update:value="onModeChange" />
+        <label>关联角色预设</label>
+        <NSelect v-model:value="form.role" :options="[{ label: '不预设', value: '' }, ...roleOptions]" />
+        <label>预输入内容</label>
         <NInput v-model:value="form.content" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="输入框中会填入这段内容" />
         <div class="qc-row">
           <div class="qc-col">

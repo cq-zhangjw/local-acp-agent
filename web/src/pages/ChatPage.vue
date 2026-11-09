@@ -2701,6 +2701,10 @@ function addQuickCommandFromMessage(item: any) {
   qcBar.value?.openNewWithContent(item.text)
 }
 
+function focusComposer() {
+  nextTick(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus())
+}
+
 function chooseRole(cmd: any) {
   systemOverride.value = cmd.content
   systemOverrideName.value = cmd.name
@@ -4095,7 +4099,7 @@ onBeforeUnmount(() => {
                         class="toolbar-pill"
                         :class="{ 'toolbar-pill--on': historyOn }"
                         :aria-label="historyOn ? actionLabels.historyOn : actionLabels.historyOff"
-                        @click="historyOn = !historyOn; localStorage.setItem(HISTORY_STORAGE_KEY, String(historyOn))"
+                        @click="historyOn = !historyOn; localStorage.setItem(HISTORY_STORAGE_KEY, String(historyOn)); focusComposer()"
                       >
                         <template #icon><NIcon :component="historyOn ? ReaderOutline : TimeOutline" /></template>
                         {{ historyOn ? actionLabels.historyOn : actionLabels.historyOff }}
@@ -4110,7 +4114,7 @@ onBeforeUnmount(() => {
                         class="toolbar-pill"
                         :class="{ 'toolbar-pill--on': webSearchOn }"
                         :aria-label="actionLabels.webSearch"
-                        @click="webSearchOn = !webSearchOn; localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(webSearchOn))"
+                        @click="webSearchOn = !webSearchOn; localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(webSearchOn)); focusComposer()"
                       >
                         <template #icon><NIcon :component="GlobeOutline" /></template>
                         {{ actionLabels.webSearch }}
@@ -4124,7 +4128,7 @@ onBeforeUnmount(() => {
                     class="toolbar-pill"
                     :class="{ 'toolbar-pill--on': !!systemOverrideName }"
                     aria-label="角色预设"
-                    @click="showRolePresets = true"
+                    @click="showRolePresets = true; focusComposer()"
                   >
                     <template #icon><NIcon :component="PersonCircleOutline" /></template>
                     {{ systemOverrideName || '角色预设' }}
