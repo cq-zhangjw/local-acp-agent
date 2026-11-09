@@ -4121,17 +4121,19 @@ onBeforeUnmount(() => {
                     </template>
                     {{ actionLabels.webSearch }}
                   </NTooltip>
-                  <NButton
-                    v-if="toolbarChatMode"
-                    quaternary size="small"
-                    class="toolbar-pill"
-                    :class="{ 'toolbar-pill--on': !!systemOverrideName }"
-                    aria-label="角色预设"
-                    @click="showRolePresets = true; focusComposer()"
-                  >
-                    <template #icon><NIcon :component="PersonCircleOutline" /></template>
-                    {{ systemOverrideName || '角色预设' }}
-                  </NButton>
+                  <div v-if="toolbarChatMode" style="position:relative;display:inline-block;">
+                    <NButton
+                      quaternary size="small"
+                      class="toolbar-pill"
+                      :class="{ 'toolbar-pill--on': !!systemOverrideName }"
+                      aria-label="角色预设"
+                      @click="showRolePresets = true; focusComposer()"
+                    >
+                      <template #icon><NIcon :component="PersonCircleOutline" /></template>
+                      {{ systemOverrideName || '角色预设' }}
+                    </NButton>
+                    <span v-if="systemOverrideName" class="role-clear-x" @click.stop="clearRole()" title="清除角色">✕</span>
+                  </div>
                   <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;height:80vh;max-width:900px" :bordered="false" :mask-closable="false" :close-on-esc="true" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
                     <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
                     <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto;">
@@ -4148,7 +4150,6 @@ onBeforeUnmount(() => {
                         <div class="qc-preview">{{ c.preview }}</div>
                       </div>
                     </div>
-                    <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
                   </NModal>
 
                   <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;max-width:1000px;height:80vh;" :mask-closable="false" title="角色编辑器" :show="showRoleEditor" @update:show="showRoleEditor = $event">
@@ -4764,6 +4765,9 @@ onBeforeUnmount(() => {
 .qc-card:hover .qc-actions { display:flex; }
 .qc-btn { border:0; background:transparent; cursor:pointer; font-size:11px; color:#64748b; padding:0 2px; }
 .qc-btn-del:hover { color:#ef4444; }
+.role-clear-x { position:absolute; top:-4px; right:-4px; width:14px; height:14px; border-radius:50%; background:#ef4444; color:#fff; font-size:10px; line-height:14px; text-align:center; cursor:pointer; display:none; }
+.role-clear-x:hover { background:#dc2626; }
+div:hover > .role-clear-x { display:block; }
 .qc-card .qc-title { font-size:13px; font-weight:600; }
 .qc-card .qc-preview { font-size:12px; color:#94a3b8; margin-top:4px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 .qc-card.qc-new { display:flex; flex-direction:column; align-items:center; justify-content:center; border-style:dashed; color:#94a3b8; }
