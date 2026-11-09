@@ -96,7 +96,9 @@ def jp_mark_text(text: str) -> dict:
     out: list[str] = []
     prev = 0
     for s, e in spans:
-        out.append(html_mod.escape(text[prev:s]))
+        # Non-Japanese parts: keep as-is (markdown-it on the frontend will render
+        # markdown like **bold**, lists, etc.). Only Japanese spans get ruby HTML.
+        out.append(text[prev:s])
         segment = text[s:e]
         marked = fn(segment)
         if isinstance(marked, str) and marked.startswith("Error:"):
@@ -104,5 +106,5 @@ def jp_mark_text(text: str) -> dict:
         else:
             out.append(str(marked))
         prev = e
-    out.append(html_mod.escape(text[prev:]))
+    out.append(text[prev:])
     return {"has_jp": True, "html": "".join(out)}

@@ -94,10 +94,10 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 // 注音 HTML 优先（后端已转义非日语段，仅 ruby/rt 结构），仍经 DOMPurify 二次消毒；
 // 否则走 markdown 渲染
 const safeHtml = computed(() => {
-  if (props.html && props.html.length > 0) {
-    return DOMPurify.sanitize(props.html)
-  }
-  return DOMPurify.sanitize(md.render(resolveAttachments(props.content)))
+  // jp-mark returns a mix of markdown text + <ruby> HTML; always run through
+  // markdown-it (html:true keeps ruby/rt tags), so **bold**, lists etc. render.
+  const src = (props.html && props.html.length > 0) ? props.html : props.content
+  return DOMPurify.sanitize(md.render(resolveAttachments(src)))
 })
 
 // 点击绝对路径链接 → 调用后端 /api/reveal-file，在系统文件管理器中打开
