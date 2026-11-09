@@ -44,6 +44,8 @@ class QuickCommandIn(BaseModel):
     mode: str = "task"
     autoSend: bool = False
     type: str = "prompt"  # "prompt" = fill input box; "system" = inject as system override
+    webSearchOn: bool = True
+    historyOn: bool = True
 
 
 @router.get("/api/quick-commands")
