@@ -73,7 +73,8 @@ function resolveAttachments(content: string): string {
 }
 
 // 开启 html 渲染（预览文本中的 html 元素），输出经 DOMPurify 白名单消毒防 XSS
-const md = new MarkdownIt({ html: true, linkify: true })
+// breaks:true 让单换行也渲染成 <br>（用户消息里换行不丢）
+const md = new MarkdownIt({ html: true, linkify: true, breaks: true })
 const defaultLinkRender = md.renderer.rules.link_open ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options))
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const href = tokens[idx].attrGet('href') || ''
