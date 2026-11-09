@@ -2649,14 +2649,17 @@ async function onQuickCommand(cmd: any) {
   }
   // Apply chat-mode toggles if present
   if (cmd.mode === 'chat') {
-    if (cmd.webSearchOn !== undefined) {
+    let needReconnect = false
+    if (cmd.webSearchOn !== undefined && cmd.webSearchOn !== webSearchOn.value) {
       webSearchOn.value = cmd.webSearchOn
       localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(cmd.webSearchOn))
+      needReconnect = true
     }
-    if (cmd.historyOn !== undefined) {
+    if (cmd.historyOn !== undefined && cmd.historyOn !== historyOn.value) {
       historyOn.value = cmd.historyOn
       localStorage.setItem(HISTORY_STORAGE_KEY, String(cmd.historyOn))
     }
+    if (needReconnect) resetSocketForAgentChange()
   }
   input.value = cmd.content
   if (cmd.autoSend) await submitPrompt()

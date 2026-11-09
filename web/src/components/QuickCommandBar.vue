@@ -132,8 +132,8 @@ onMounted(load)
           <NTag size="tiny" :bordered="false">{{ cmd.agent }}</NTag>
           <NTag v-if="cmd.model" size="tiny" :bordered="false" type="info">{{ cmd.model }}</NTag>
           <NTag size="tiny" :bordered="false" :type="cmd.mode === 'chat' ? 'success' : 'warning'">{{ cmd.mode === 'chat' ? 'Chat' : 'Task' }}</NTag>
-          <NTag v-if="cmd.webSearchOn" size="tiny" :bordered="false" type="info">🌐 搜索</NTag>
-          <NTag v-if="cmd.historyOn" size="tiny" :bordered="false" type="info">📜 历史</NTag>
+          <NTag v-if="cmd.webSearchOn" size="tiny" :bordered="false" type="info">🌐</NTag>
+          <NTag v-if="cmd.historyOn" size="tiny" :bordered="false" type="info">📜</NTag>
         </div>
       </div>
     </div>
