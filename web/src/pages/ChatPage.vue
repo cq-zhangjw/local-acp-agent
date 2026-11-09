@@ -1078,11 +1078,11 @@ const roleSearch = ref('')
 const filteredRoles = computed(() => {
   if (!roleSearch.value) return systemCommands.value
   const q = roleSearch.value.toLowerCase()
-  return systemCommands.value.filter((c: any) => c.title.toLowerCase().includes(q) || c.content.toLowerCase().includes(q))
+  return systemCommands.value.filter((c: any) => c.name.toLowerCase().includes(q) || (c.content || '').toLowerCase().includes(q))
 })
 function refreshSystemCommands() {
-  fetch('/api/quick-commands').then(r => r.json()).then(d => {
-    if (d.ok) systemCommands.value = d.items.filter((c: any) => c.type === 'system')
+  fetch('/api/roles').then(r => r.json()).then(d => {
+    if (d.ok) systemCommands.value = d.items
   }).catch(() => {})
 }
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
@@ -2666,14 +2666,17 @@ async function onQuickCommand(cmd: any) {
     currentModel.value = cmd.model
     localStorage.setItem(MODEL_STORAGE_KEY, cmd.model)
   }
-  if (cmd.type === 'system') {
-    // System-prompt preset: store as override, don't fill input.
-    systemOverride.value = cmd.content
-    systemOverrideName.value = cmd.title
-    message.success(`已启用系统预设：${cmd.title}`)
-    return
+  // Apply associated role preset if any
+  if (cmd.role) {
+    fetch(`/api/roles/${encodeURIComponent(cmd.role)}`).catch(() => {})
+    // Find role content from list
+    const r = systemCommands.value.find((x: any) => x.name === cmd.role)
+    if (r) {
+      systemOverride.value = r.content
+      systemOverrideName.value = r.name
+    }
   }
-  // Apply chat-mode toggles if present
+  input.value = cmd.content
   if (cmd.mode === 'chat') {
     let needReconnect = false
     if (cmd.webSearchOn !== undefined && cmd.webSearchOn !== webSearchOn.value) {
@@ -2700,14 +2703,52 @@ function addQuickCommandFromMessage(item: any) {
 
 function chooseRole(cmd: any) {
   systemOverride.value = cmd.content
-  systemOverrideName.value = cmd.title
+  systemOverrideName.value = cmd.name
   showRolePresets.value = false
-  message.success(`已启用角色：${cmd.title}`)
+  message.success(`已启用角色：${cmd.name}`)
 }
 function clearRole() {
   systemOverride.value = ''
   systemOverrideName.value = ''
   showRolePresets.value = false
+}
+
+// Role editor state
+const showRoleEditor = ref(false)
+const editingRoleName = ref('')
+const roleEditorName = ref('')
+const roleEditorContent = ref('')
+
+function openRoleEditor(role?: any) {
+  if (role) {
+    editingRoleName.value = role.name
+    roleEditorName.value = role.name
+    roleEditorContent.value = role.content
+  } else {
+    editingRoleName.value = ''
+    roleEditorName.value = ''
+    roleEditorContent.value = ''
+  }
+  showRoleEditor.value = true
+}
+
+async function saveRole() {
+  const name = roleEditorName.value.trim()
+  if (!name) return
+  await fetch(`/api/roles/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: roleEditorContent.value }),
+  })
+  showRoleEditor.value = false
+  showRolePresets.value = false
+  refreshSystemCommands()
+  message.success(`角色 ${name} 已保存`)
+}
+
+async function deleteRole(name: string) {
+  await fetch(`/api/roles/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  refreshSystemCommands()
 }
 
 async function submitPrompt() {
@@ -4091,23 +4132,40 @@ onBeforeUnmount(() => {
                   <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;height:80vh;max-width:900px" :bordered="false" :mask-closable="false" :close-on-esc="true" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
                     <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
                     <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto;">
-                      <div class="qc-card qc-new" @click="qcBar?.openNewRole(); refreshSystemCommands()">
+                      <div class="qc-card qc-new" @click="openRoleEditor()">
                         <span class="qc-new-plus">＋</span>
                         <span class="qc-new-label">新建角色</span>
                       </div>
-                      <div v-for="c in filteredRoles" :key="c.id" class="qc-card" :class="{ 'qc-card--active': c.title === systemOverrideName }" @click="chooseRole(c)">
-                        <div class="qc-title">{{ c.title }}</div>
-                        <div class="qc-preview">{{ c.content }}</div>
-                        <div class="qc-tags">
-                          <span class="qc-tag">{{ c.agent }}</span>
-                          <span v-if="c.model" class="qc-tag qc-tag--info">{{ c.model }}</span>
-                          <span class="qc-tag" :class="c.mode === 'chat' ? 'qc-tag--green' : 'qc-tag--orange'">{{ c.mode === 'chat' ? 'Chat' : 'Task' }}</span>
-                          <span v-if="c.webSearchOn" class="qc-tag">🌐</span>
-                          <span v-if="c.historyOn" class="qc-tag">📜</span>
+                      <div v-for="c in filteredRoles" :key="c.name" class="qc-card" :class="{ 'qc-card--active': c.name === systemOverrideName }" @click="chooseRole(c)">
+                        <div class="qc-title">{{ c.name }}</div>
+                        <div class="qc-preview">{{ c.preview }}</div>
+                        <div style="display:flex;gap:6px;margin-top:6px;">
+                          <a style="font-size:11px;color:#2563eb;cursor:pointer;" @click.stop="openRoleEditor(c)">编辑</a>
+                          <a style="font-size:11px;color:#ef4444;cursor:pointer;" @click.stop="deleteRole(c.name)">删除</a>
                         </div>
                       </div>
                     </div>
                     <div v-if="systemOverrideName" style="margin-top:12px;text-align:center;font-size:12px;color:#ef4444;cursor:pointer;" @click="clearRole">清除角色预设</div>
+                  </NModal>
+
+                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;max-width:1000px;height:80vh" :mask-closable="false" title="角色编辑器" :show="showRoleEditor" @update:show="showRoleEditor = $event">
+                    <NInput v-model:value="roleEditorName" size="small" placeholder="角色名（将作为 .deepagents/roles/<名>.md）" style="margin-bottom:10px" />
+                    <div style="display:flex;gap:12px;height:calc(80vh - 140px);">
+                      <div style="flex:1;display:flex;flex-direction:column;">
+                        <div style="font-size:12px;color:#64748b;margin-bottom:4px;">提示词（markdown）</div>
+                        <textarea v-model="roleEditorContent" style="flex:1;width:100%;resize:none;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:13px;font-family:inherit;" placeholder="写入角色的 system prompt..."></textarea>
+                      </div>
+                      <div style="flex:1;display:flex;flex-direction:column;">
+                        <div style="font-size:12px;color:#64748b;margin-bottom:4px;">预览</div>
+                        <div style="flex:1;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#fafafa;">
+                          <MarkdownMessage :content="roleEditorContent" />
+                        </div>
+                      </div>
+                    </div>
+                    <div style="margin-top:12px;text-align:right;">
+                      <NButton size="small" style="margin-right:8px;" @click="showRoleEditor = false">取消</NButton>
+                      <NButton size="small" type="primary" @click="saveRole">保存</NButton>
+                    </div>
                   </NModal>
                 </template>
               </div>

@@ -29,7 +29,16 @@ const emit = defineEmits<{
 const list = ref<QuickCommand[]>([])
 const showModal = ref(false)
 const editing = ref<QuickCommand | null>(null)
-const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false, type: 'prompt', webSearchOn: true, historyOn: true })
+const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false, role: '', webSearchOn: true, historyOn: true })
+const roleOptions = ref<{ label: string; value: string }[]>([])
+
+async function loadRoles() {
+  try {
+    const r = await fetch('/api/roles')
+    const d = await r.json()
+    if (d.ok) roleOptions.value = d.items.map((r: any) => ({ label: r.name, value: r.name }))
+  } catch {}
+}
 
 // Task mode: can't pick the lightweight Chat agent. Chat mode: agent is Chat, model locked.
 const agentOptions = computed(() => {
@@ -52,19 +61,20 @@ async function load() {
   try {
     const r = await fetch('/api/quick-commands')
     const d = await r.json()
-    if (d.ok) list.value = d.items.filter((c: any) => c.type !== 'system')
+    if (d.ok) list.value = d.items
   } catch {}
 }
 
 function openNew() {
   editing.value = null
-  form.value = { title: '', content: '', agent: props.currentAgent, model: props.currentModel, mode: 'task', autoSend: false, type: 'prompt', webSearchOn: true, historyOn: true }
+  form.value = { title: '', content: '', agent: props.currentAgent, model: props.currentModel, mode: 'task', autoSend: false, role: '', webSearchOn: true, historyOn: true }
   showModal.value = true
 }
 
 function openNewRole() {
+  // Not used in new architecture; kept for API compat.
   editing.value = null
-  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, type: 'system', webSearchOn: true, historyOn: true }
+  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true }
   showModal.value = true
 }
 
@@ -77,7 +87,7 @@ function openNewWithContent(text: string) {
     model: '',
     mode: props.currentAgent === 'Chat' ? 'chat' : 'task',
     autoSend: false,
-    type: 'prompt',
+    role: '',
     webSearchOn: true,
     historyOn: true,
   }
@@ -88,7 +98,7 @@ defineExpose({ openNew, openNewWithContent, openNewRole })
 
 function openEdit(cmd: QuickCommand) {
   editing.value = cmd
-  form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend, type: cmd.type || 'prompt', webSearchOn: cmd.webSearchOn !== false, historyOn: cmd.historyOn !== false }
+  form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend, role: cmd.role || '', webSearchOn: cmd.webSearchOn !== false, historyOn: cmd.historyOn !== false }
   showModal.value = true
 }
 
@@ -115,7 +125,7 @@ function invoke(cmd: QuickCommand) {
   emit('invoke', cmd)
 }
 
-onMounted(load)
+onMounted(() => { load(); loadRoles() })
 </script>
 
 <template>
@@ -140,14 +150,15 @@ onMounted(load)
           <NTag size="tiny" :bordered="false" :type="cmd.mode === 'chat' ? 'success' : 'warning'">{{ cmd.mode === 'chat' ? 'Chat' : 'Task' }}</NTag>
           <NTag v-if="cmd.webSearchOn" size="tiny" :bordered="false" type="info">🌐</NTag>
           <NTag v-if="cmd.historyOn" size="tiny" :bordered="false" type="info">📜</NTag>
+          <NTag v-if="cmd.role" size="tiny" :bordered="false" type="warning">👤 {{ cmd.role }}</NTag>
         </div>
       </div>
     </div>
 
     <NModal v-model:show="showModal" preset="card" style="width:520px" :mask-closable="false" :title="editing ? '编辑快捷指令' : '新建快捷指令'">
       <div class="qc-form">
-        <label>类型</label>
-        <NSelect v-model:value="form.type" :options="[{ label: '发送为消息（填入输入框）', value: 'prompt' }, { label: '设为系统提示词（角色/行为规范）', value: 'system' }]" :disabled="!editing" />
+        <label>关联角色预设</label>
+        <NSelect v-model:value="form.role" :options="roleOptions" placeholder="不关联" clearable />
         <label>模式</label>
         <NSelect v-model:value="form.mode" :options="[{ label: 'Chat（轻量对话，锁默认模型）', value: 'chat' }, { label: 'Task（完整 Agent 工作区）', value: 'task' }]" @update:value="onModeChange" />
         <label>标题</label>

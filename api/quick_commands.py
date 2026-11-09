@@ -43,7 +43,7 @@ class QuickCommandIn(BaseModel):
     model: str = ""
     mode: str = "task"
     autoSend: bool = False
-    type: str = "prompt"  # "prompt" = fill input box; "system" = inject as system override
+    role: str = ""  # associated role preset name; empty = no role
     webSearchOn: bool = True
     historyOn: bool = True
 
