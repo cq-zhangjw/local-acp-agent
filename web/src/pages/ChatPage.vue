@@ -162,6 +162,8 @@ interface Conversation {
   /** Per-session chat toggles. */
   webSearchOn?: boolean
   historyOn?: boolean
+  /** Per-session active role preset name. */
+  roleName?: string
 }
 
 interface TodoItem {
@@ -679,6 +681,18 @@ function selectConversation(id: string) {
   if (modeConv?.historyOn !== undefined && modeConv.historyOn !== historyOn.value) {
     historyOn.value = modeConv.historyOn
     localStorage.setItem(HISTORY_STORAGE_KEY, String(modeConv.historyOn))
+  }
+  // Restore per-session role preset
+  const convRole = modeConv?.roleName
+  if (convRole) {
+    const r = systemCommands.value.find((x: any) => x.name === convRole)
+    if (r) {
+      systemOverride.value = r.content
+      systemOverrideName.value = r.name
+    }
+  } else {
+    systemOverride.value = ''
+    systemOverrideName.value = ''
   }
   contextOverride.value = null // usage is per-session; refreshed after history load
   messageWindowSize.value = MESSAGE_WINDOW
@@ -2792,6 +2806,7 @@ async function submitPrompt() {
   // Persist per-session toggles
   conversation.webSearchOn = webSearchOn.value
   conversation.historyOn = historyOn.value
+  conversation.roleName = systemOverrideName.value
   moveConversationToTop(conversation)
   input.value = ''
   attachments.value = []
