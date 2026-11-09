@@ -1055,6 +1055,9 @@ const historyOn = ref(localStorage.getItem(HISTORY_STORAGE_KEY) !== 'false') // 
 /** 联网搜索开关（仅 Chat 模式）：开启时先搜网再回答。 */
 const WEB_SEARCH_STORAGE_KEY = 'chat_web_search_on'
 const webSearchOn = ref(localStorage.getItem(WEB_SEARCH_STORAGE_KEY) !== 'false') // 默认开
+
+/** System-prompt override set by clicking a "system" quick command. Prepended to every prompt until cleared. */
+const systemOverride = ref('')
 // 日语自动注音常驻开启（显示层），无开关；后端 /api/jp-mark 保留
 
 const currentModel = ref('')
@@ -2545,6 +2548,7 @@ async function sendAgentPrompt(
     }
 
     const promptLines: string[] = []
+    if (systemOverride.value) promptLines.push(`[系统预设] ${systemOverride.value}`)
     if (text) promptLines.push(text)
     const imageBlocks: Array<Record<string, unknown>> = []
     for (const resource of uploaded) {
@@ -2633,6 +2637,12 @@ async function onQuickCommand(cmd: any) {
   if (cmd.model && cmd.model !== currentModel.value) {
     currentModel.value = cmd.model
     localStorage.setItem(MODEL_STORAGE_KEY, cmd.model)
+  }
+  if (cmd.type === 'system') {
+    // System-prompt preset: store as override, don't fill input.
+    systemOverride.value = cmd.content
+    message.success(`已启用系统预设：${cmd.title}`)
+    return
   }
   input.value = cmd.content
   if (cmd.autoSend) await submitPrompt()

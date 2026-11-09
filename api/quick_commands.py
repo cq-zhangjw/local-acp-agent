@@ -43,6 +43,7 @@ class QuickCommandIn(BaseModel):
     model: str = ""
     mode: str = "task"
     autoSend: bool = False
+    type: str = "prompt"  # "prompt" = fill input box; "system" = inject as system override
 
 
 @router.get("/api/quick-commands")
