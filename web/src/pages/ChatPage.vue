@@ -159,6 +159,9 @@ interface Conversation {
   mode?: 'chat' | 'task'
   /** Model chosen for this conversation (name in model_config.json); passed to the backend via WS query param like agent. */
   model?: string
+  /** Per-session chat toggles. */
+  webSearchOn?: boolean
+  historyOn?: boolean
 }
 
 interface TodoItem {
@@ -667,6 +670,15 @@ function selectConversation(id: string) {
   if (convModel && convModel !== currentModel.value) {
     currentModel.value = convModel
     resetSocketForAgentChange()
+  }
+  // Restore per-session chat toggles
+  if (modeConv?.webSearchOn !== undefined && modeConv.webSearchOn !== webSearchOn.value) {
+    webSearchOn.value = modeConv.webSearchOn
+    localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(modeConv.webSearchOn))
+  }
+  if (modeConv?.historyOn !== undefined && modeConv.historyOn !== historyOn.value) {
+    historyOn.value = modeConv.historyOn
+    localStorage.setItem(HISTORY_STORAGE_KEY, String(modeConv.historyOn))
   }
   contextOverride.value = null // usage is per-session; refreshed after history load
   messageWindowSize.value = MESSAGE_WINDOW
@@ -2707,6 +2719,9 @@ async function submitPrompt() {
   conversation.messages.push(userMessage, assistantMessage)
   conversation.title = displayTitle(conversation.title) === t('newSessionTitle') ? (text || resources[0]?.name || t('attachmentTask')).slice(0, 24) : conversation.title
   conversation.updatedAt = Date.now()
+  // Persist per-session toggles
+  conversation.webSearchOn = webSearchOn.value
+  conversation.historyOn = historyOn.value
   moveConversationToTop(conversation)
   input.value = ''
   attachments.value = []
