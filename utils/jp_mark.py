@@ -63,7 +63,12 @@ def _load_jp_mark_ruby():
 
 
 def _extract_jp_spans(text: str) -> list[tuple[int, int]]:
-    """Return (start, end) spans of kana-bearing Japanese segments."""
+    """Return (start, end) spans of kana-bearing Japanese segments.
+
+    Spans are extended to adjacent kanji, but rejected if the kana ratio is
+    too low (i.e. the span is mostly Chinese characters that happen to be
+    adjacent to a stray kana).
+    """
     spans: list[tuple[int, int]] = []
     n = len(text)
     i = 0
@@ -75,7 +80,12 @@ def _extract_jp_spans(text: str) -> list[tuple[int, int]]:
             e = i + 1
             while e < n and _SEG_CHAR_RE.match(text[e]):
                 e += 1
-            spans.append((s, e))
+            # Reject spans that are mostly CJK (Chinese text with a stray kana).
+            # Require at least ~20% kana density to consider it Japanese.
+            seg = text[s:e]
+            kana_count = len(_KANA_RE.findall(seg))
+            if len(seg) > 0 and kana_count / len(seg) >= 0.15:
+                spans.append((s, e))
             i = e
         else:
             i += 1
