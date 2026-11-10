@@ -585,6 +585,9 @@ function openNewConversation() {
 }
 
 function createConversation(mode: 'chat' | 'task' = 'task') {
+  // Sidebar grouping: show the matching group, collapse the other.
+  chatCollapsed.value = mode !== 'chat'
+  agentCollapsed.value = mode === 'chat'
   if (mode === 'chat') {
     // Chat mode: agent is fixed to "Chat" (lightweight, no tools/skills).
     if (currentAgentName.value !== 'Chat') {
