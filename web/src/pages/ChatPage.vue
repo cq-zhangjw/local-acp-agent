@@ -587,15 +587,11 @@ function openNewConversation() {
 }
 
 function createConversation(mode: 'chat' | 'task' = 'task') {
-  // Reset toolbar defaults for a fresh conversation.
-  webSearchOn.value = true
-  historyOn.value = true
-  jpMarkOn.value = true
-  localStorage.setItem(WEB_SEARCH_STORAGE_KEY, 'true')
-  localStorage.setItem(HISTORY_STORAGE_KEY, 'true')
-  localStorage.setItem(JP_MARK_STORAGE_KEY, 'true')
-  // NOTE: don't clear systemOverride — user may have picked a role on the
-  // welcome page before sending; it should carry into the new conversation.
+  // Sidebar grouping: show the matching group, collapse the other.
+  chatCollapsed.value = mode !== 'chat'
+  agentCollapsed.value = mode === 'chat'
+  // NOTE: don't reset webSearch/history/jpMark — user may have toggled them
+  // on the welcome page before sending; keep their current selection.
   // Sidebar grouping: show the matching group, collapse the other.
   chatCollapsed.value = mode !== 'chat'
   agentCollapsed.value = mode === 'chat'
