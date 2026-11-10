@@ -258,12 +258,28 @@
     {
       "name": "search_web",
       "title": "Search Web",
-      "description": "Search the web (Bing CN or Baidu) and return top results.\n\nFree, no API key. Use this when the user asks for up-to-date info, news,\nor anything beyond your training cutoff. Bing is default; switch to\n\"baidu\" if Bing results are insufficient for Chinese queries.",
+      "description": "Search the web (Bing CN or Baidu) and return top results.\n\nUse this when the user asks for up-to-date info, news, or anything beyond\nyour training cutoff. Search at most 10 times per conversation; if you\nstill find nothing useful, tell the user and answer from your own knowledge.",
       "inputSchema": {
         "properties": {
           "query": {
+            "default": "",
             "type": "string",
-            "description": "search keywords, e.g. \"2026年最新 AI Agent 框架对比\""
+            "description": "single search keywords, e.g. \"2026年最新 AI Agent 框架对比\""
+          },
+          "queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "optional list of independent queries to run in one batch\n(e.g. [\"产品A 价格\", \"产品B 价格\"]). Leave empty for a single search."
           },
           "engine": {
             "default": "bing",
@@ -273,12 +289,9 @@
           "max_results": {
             "default": 8,
             "type": "integer",
-            "description": "number of results to return (default 8, max 15)"
+            "description": "results per query (default 8, max 15)"
           }
         },
-        "required": [
-          "query"
-        ],
         "type": "object",
         "additionalProperties": false
       },

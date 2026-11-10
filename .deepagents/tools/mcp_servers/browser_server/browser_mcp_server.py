@@ -666,48 +666,66 @@ async def _http_get(url: str, timeout: float = 15.0) -> str:
 
 
 @mcp.tool()
-async def search_web(query: str, engine: str = "bing", max_results: int = 8) -> str:
+async def search_web(
+    query: str = "",
+    queries: list[str] | None = None,
+    engine: str = "bing",
+    max_results: int = 8,
+) -> str:
     """Search the web (Bing CN or Baidu) and return top results.
 
-    Free, no API key. Use this when the user asks for up-to-date info, news,
-    or anything beyond your training cutoff. Bing is default; switch to
-    "baidu" if Bing results are insufficient for Chinese queries.
+    Use this when the user asks for up-to-date info, news, or anything beyond
+    your training cutoff. Search at most 10 times per conversation; if you
+    still find nothing useful, tell the user and answer from your own knowledge.
 
     Args:
-        query: search keywords, e.g. "2026年最新 AI Agent 框架对比"
+        query: single search keywords, e.g. "2026年最新 AI Agent 框架对比"
+        queries: optional list of independent queries to run in one batch
+            (e.g. ["产品A 价格", "产品B 价格"]). Leave empty for a single search.
         engine: "bing" (default) or "baidu"
-        max_results: number of results to return (default 8, max 15)
+        max_results: results per query (default 8, max 15)
     """
     try:
         max_results = max(1, min(int(max_results), 15))
-        if engine == "baidu":
-            html = await _http_get(f"https://www.baidu.com/s?wd={query}&rn={max_results}")
-            results = []
-            for m in re.finditer(r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>', html, re.S | re.I):
-                title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
-                if title:
-                    results.append({"title": title, "url": m.group(1), "snippet": ""})
-        else:
-            html = await _http_get(f"https://cn.bing.com/search?q={query}")
-            results = []
-            for m in re.finditer(r'<li class="b_algo".*?</li>', html, re.S):
-                block = m.group(0)
-                t = re.search(r"<h2>(.*?)</h2>", block, re.S)
-                u = re.search(r'<a[^>]*href="(http[^"]+)"', block)
-                s = re.search(r'<p[^>]*>(.*?)</p>', block, re.S)
-                if t and u:
-                    results.append({
-                        "title": re.sub(r"<[^>]+>", "", t.group(1)).strip(),
-                        "url": u.group(1),
-                        "snippet": re.sub(r"<[^>]+>", "", s.group(1)).strip() if s else "",
-                    })
-        results = results[:max_results]
-        if not results:
-            return f"No results for '{query}' (engine={engine}). Try the other engine."
-        lines = [f"=== Web results for: {query} ({engine}) ==="]
-        for i, r in enumerate(results, 1):
-            lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}")
-        return "\n\n".join(lines)
+        qs = list(queries) if queries else []
+        if query:
+            qs.insert(0, query)
+        if not qs:
+            return "Error: provide either query or queries."
+        all_results = []
+        for q in qs:
+            if engine == "baidu":
+                html = await _http_get(f"https://www.baidu.com/s?wd={q}&rn={max_results}")
+                results = []
+                for m in re.finditer(r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>', html, re.S | re.I):
+                    title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+                    if title:
+                        results.append({"title": title, "url": m.group(1), "snippet": ""})
+            else:
+                html = await _http_get(f"https://cn.bing.com/search?q={q}")
+                results = []
+                for m in re.finditer(r'<li class="b_algo".*?</li>', html, re.S):
+                    block = m.group(0)
+                    t = re.search(r"<h2>(.*?)</h2>", block, re.S)
+                    u = re.search(r'<a[^>]*href="(http[^"]+)"', block)
+                    s = re.search(r'<p[^>]*>(.*?)</p>', block, re.S)
+                    if t and u:
+                        results.append({
+                            "title": re.sub(r"<[^>]+>", "", t.group(1)).strip(),
+                            "url": u.group(1),
+                            "snippet": re.sub(r"<[^>]+>", "", s.group(1)).strip() if s else "",
+                        })
+            all_results.append((q, results[:max_results]))
+        lines = []
+        for q, results in all_results:
+            if not results:
+                lines.append(f"=== No results for: {q} ===")
+                continue
+            lines.append(f"=== Web results for: {q} ({engine}) ===")
+            for i, r in enumerate(results, 1):
+                lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}")
+            lines.append("")
+        return "\n".join(lines).strip()
     except Exception:
         return f"Error: {traceback.format_exc()}"
 

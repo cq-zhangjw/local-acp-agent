@@ -219,8 +219,10 @@ def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_
     if web_search and (agent_name or "") == "Chat":
         parts.append(
             "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
-            "先用 search_web 工具把问题转成关键词搜索（中文问题用中文关键词），"
-            "阅读搜索结果后再回答；如果结果不够，换关键词或换 engine=baidu 再搜一次。"
+            "先用 search_web 工具搜索（中文问题用中文关键词）。"
+            "可以一次传 queries 数组搜多个独立维度。"
+            "每轮对话最多搜索 10 次；如果搜不到相关信息，直接告诉用户，"
+            "然后根据你自身的知识回答，不要无止境换词搜索。"
             "回答时引用来源 URL。"
         )
     global_rules = "\n\n".join(parts)
