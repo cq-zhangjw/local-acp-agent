@@ -587,6 +587,15 @@ function openNewConversation() {
 }
 
 function createConversation(mode: 'chat' | 'task' = 'task') {
+  // Reset toolbar defaults for a fresh conversation.
+  webSearchOn.value = true
+  historyOn.value = true
+  jpMarkOn.value = true
+  localStorage.setItem(WEB_SEARCH_STORAGE_KEY, 'true')
+  localStorage.setItem(HISTORY_STORAGE_KEY, 'true')
+  localStorage.setItem(JP_MARK_STORAGE_KEY, 'true')
+  systemOverride.value = ''
+  systemOverrideName.value = ''
   // Sidebar grouping: show the matching group, collapse the other.
   chatCollapsed.value = mode !== 'chat'
   agentCollapsed.value = mode === 'chat'
