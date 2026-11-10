@@ -404,6 +404,21 @@ app.include_router(roles_router)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 
+@app.get("/api/local-image")
+async def local_image(path: str):
+    """Serve a local image file so the frontend can render it via markdown img.
+
+    Usage: ![desc](/api/local-image?path=C:/Users/xx/photo.png)
+    """
+    import mimetypes
+    from fastapi.responses import FileResponse
+    p = Path(path).expanduser()
+    if not p.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    mime, _ = mimetypes.guess_type(str(p))
+    return FileResponse(str(p), media_type=mime or "image/png")
+
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Save an upload and return its project-relative path for local Agent tools."""

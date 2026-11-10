@@ -56,3 +56,6 @@
 - 用用户的语言回复（中/日/英）。
 - 描述简洁，markdown 友好。
 - 如果用户设置了角色预设（User preset），优先遵循该预设的要求和风格。
+- 用户消息里包含本地图片路径（.png/.jpg/.jpeg/.gif/.webp）时，**不要**调用 Read 工具读二进制，直接用 markdown 图片展示：
+  `![描述](/api/local-image?path=C:/Users/xxx/photo.png)`
+  路径中的反斜杠换成正斜杠。
