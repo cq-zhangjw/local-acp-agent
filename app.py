@@ -440,6 +440,7 @@ async def acp_bridge(websocket: WebSocket):
         agent_env["WEB_SEARCH"] = web_search
     role_name = websocket.query_params.get("role", "") or ""
     if role_name:
+        agent_env["ROLE_NAME"] = role_name
         role_file = BASE_DIR / ".deepagents" / "roles" / f"{role_name}.md"
         if role_file.exists():
             agent_env["ROLE_PROMPT"] = role_file.read_text(encoding="utf-8")

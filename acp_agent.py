@@ -205,6 +205,28 @@ def get_system_prompt(agent_name: str | None = None) -> str:
 SYSTEM_PROMPT = get_system_prompt()
 
 
+def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_search: bool = False) -> str:
+    """Assemble the final system prompt used at runtime.
+
+    Shared by the agent startup (acp_agent.py) and the context debug view
+    (api/context.py) so both show exactly what the model receives.
+    """
+    parts = []
+    if role_name:
+        role_file = Path(".deepagents") / "roles" / f"{role_name}.md"
+        if role_file.exists():
+            parts.append(role_file.read_text(encoding="utf-8"))
+    parts.append(get_system_prompt(agent_name))
+    if web_search and (agent_name or "") == "Chat":
+        parts.append(
+            "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
+            "先用 search_web 工具把问题转成关键词搜索（中文问题用中文关键词），"
+            "阅读搜索结果后再回答；如果结果不够，换关键词或换 engine=baidu 再搜一次。"
+            "回答时引用来源 URL。"
+        )
+    return "\n\n".join(parts)
+
+
 class PowerShellBackend(LocalShellBackend):
     """Windows-specific shell backend: execute commands go through PowerShell.
 
@@ -361,13 +383,15 @@ def build_agent(
         # conversational model with no local file or shell access.
         chat_backend = StateBackend()
         chat_tools = []
-        # Role preset (if selected) becomes the top of the system prompt — a
-        # real system message, not prepended to the user turn.
         role_prompt = os.getenv("ROLE_PROMPT", "").strip()
-        chat_system_prompt = ""
-        if role_prompt:
-            chat_system_prompt += role_prompt + "\n\n"
-        chat_system_prompt += f"{get_system_prompt('Chat')}\n\n"
+        role_name = ""
+        # Resolve role_name from the role file content — we don't have the name
+        # here, but build_system_prompt reads it fresh. For now use env.
+        chat_system_prompt = build_system_prompt(
+            "Chat",
+            role_name=os.getenv("ROLE_NAME", ""),
+            web_search=os.getenv("WEB_SEARCH", "").strip() == "1",
+        )
         # Optional web search (toggled from the composer): inject the
         # web_search_server MCP tool and instruct the model to search first.
         if os.getenv("WEB_SEARCH", "").strip() == "1":
