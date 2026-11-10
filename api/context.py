@@ -267,8 +267,8 @@ def _overhead_breakdown(agent_name: str) -> dict:
         "system_prompt": {
             "chars": len(sp_text),
             "tokens": sp_tokens,
-            "preview": sp_text[:1500],
-            "truncated": len(sp_text) > 1500,
+            "preview": sp_text,
+            "truncated": False,
         },
         "tools": tool_rows,
         "tool_count": len(tool_rows),
@@ -409,20 +409,26 @@ def _html_context_report(report: dict) -> str:
         f"Overhead 组成（system prompt + 工具 schema，约 {oh.get('total_tokens',0)} tokens，"
         f"{oh.get('tool_count',0)} 个工具）— 永不压缩</summary>"
         "<div style='margin-top:12px'>"
-        f"<div style='font-size:13px;color:#6b7280;margin-bottom:4px'>System prompt "
-        f"（{oh_sp.get('tokens',0)} tokens）</div>"
-        f"<pre style='white-space:pre-wrap;word-break:break-word;margin:0 0 14px;"
-        f"font-size:12px;line-height:1.6;max-height:300px;overflow:auto;background:#f8fafc;"
-        f"padding:10px 12px;border-radius:6px'>{esc(oh_sp.get('preview') or '（空）')}"
-        f"{' …（已截断）' if oh_sp.get('truncated') else ''}</pre>"
-        f"<div style='font-size:13px;color:#6b7280;margin-bottom:4px'>工具 schema（{oh.get('tool_count',0)} 个）</div>"
-        "<table style='border-collapse:collapse;width:100%;font-size:12px'>"
+        # System prompt: separate collapsible, no truncation, no max-height
+        "<details open style='margin-bottom:12px'>"
+        f"<summary style='cursor:pointer;font-size:13px;color:#374151;font-weight:600'>"
+        f"System prompt（{oh_sp.get('tokens',0)} tokens）</summary>"
+        f"<pre style='white-space:pre-wrap;word-break:break-word;margin:8px 0 0;"
+        f"font-size:12px;line-height:1.6;background:#f8fafc;"
+        f"padding:10px 12px;border-radius:6px'>{esc(oh_sp.get('preview') or '（空）')}</pre>"
+        "</details>"
+        # Tools schema: separate collapsible
+        "<details>"
+        f"<summary style='cursor:pointer;font-size:13px;color:#374151;font-weight:600'>"
+        f"工具 schema（{oh.get('tool_count',0)} 个）</summary>"
+        "<table style='border-collapse:collapse;width:100%;font-size:12px;margin-top:8px'>"
         "<thead><tr style='background:#f1f5f9'>"
         "<th style='padding:6px 8px;text-align:left'>工具名</th>"
         "<th style='padding:6px 8px;text-align:left'>来源</th>"
         "<th style='padding:6px 8px;text-align:right'>tokens</th>"
         "<th style='padding:6px 8px;text-align:left'>描述</th></tr></thead>"
         f"<tbody>{tool_rows_html}</tbody></table>"
+        "</details>"
         "</div></details>"
     )
 
