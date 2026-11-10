@@ -208,15 +208,14 @@ SYSTEM_PROMPT = get_system_prompt()
 def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_search: bool = False) -> str:
     """Assemble the final system prompt used at runtime.
 
+    Layout:
+      # Global rules   — base agent prompt + web_search hint
+      # User preset    — role markdown (if selected)
+
     Shared by the agent startup (acp_agent.py) and the context debug view
     (api/context.py) so both show exactly what the model receives.
     """
-    parts = []
-    if role_name:
-        role_file = Path(".deepagents") / "roles" / f"{role_name}.md"
-        if role_file.exists():
-            parts.append(role_file.read_text(encoding="utf-8"))
-    parts.append(get_system_prompt(agent_name))
+    parts = [get_system_prompt(agent_name)]
     if web_search and (agent_name or "") == "Chat":
         parts.append(
             "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
@@ -224,7 +223,18 @@ def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_
             "阅读搜索结果后再回答；如果结果不够，换关键词或换 engine=baidu 再搜一次。"
             "回答时引用来源 URL。"
         )
-    return "\n\n".join(parts)
+    global_rules = "\n\n".join(parts)
+
+    user_preset = ""
+    if role_name:
+        role_file = Path(".deepagents") / "roles" / f"{role_name}.md"
+        if role_file.exists():
+            user_preset = role_file.read_text(encoding="utf-8").strip()
+
+    out = f"# Global rules\n{global_rules}"
+    if user_preset:
+        out += f"\n\n# User preset\n{user_preset}"
+    return out
 
 
 class PowerShellBackend(LocalShellBackend):
