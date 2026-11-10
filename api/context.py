@@ -222,16 +222,22 @@ def _msg_is_summary(m) -> bool:
     return bool(text and text.lstrip().startswith(SUMMARY_PREFIX))
 
 
-def _overhead_breakdown(agent_name: str) -> dict:
+def _overhead_breakdown(agent_name: str, role_name: str = "") -> dict:
     """Estimate the fixed overhead tokens that are NOT in the message list:
     system prompt + tool schemas. These are never compacted, but they DO count
     against content_size, so the debug view should show them explicitly.
     """
     # system prompt (reuse acp_agent's loader so Chat vs Default logic matches)
+    sp_parts = []
+    if role_name:
+        role_file = Path(__file__).resolve().parent.parent / ".deepagents" / "roles" / f"{role_name}.md"
+        if role_file.exists():
+            sp_parts.append(f"[角色预设：{role_name}]\n" + role_file.read_text(encoding="utf-8"))
     try:
-        sp_text = _acp.get_system_prompt(agent_name) or ""
+        sp_parts.append(_acp.get_system_prompt(agent_name) or "")
     except Exception:  # noqa: BLE001
-        sp_text = ""
+        pass
+    sp_text = "\n\n".join(p for p in sp_parts if p)
     sp_tokens = round(estimate_text_tokens(sp_text))
 
     # tools: inner_tools (built-in deepagents) + mcp_tools (from agents.json)
@@ -276,7 +282,7 @@ def _overhead_breakdown(agent_name: str) -> dict:
     }
 
 
-def _build_context_report(session_id: str, agent_name: str, max_chars: int) -> dict:
+def _build_context_report(session_id: str, agent_name: str, max_chars: int, role_name: str = "") -> dict:
     """Assemble the debug report for the context the next prompt will use."""
     messages_json = sc_get_context(session_id)
     if messages_json is None:
@@ -346,7 +352,7 @@ def _build_context_report(session_id: str, agent_name: str, max_chars: int) -> d
             "pct": round(100 * tokens / CONTENT_SIZE, 1) if CONTENT_SIZE else 0,
         },
         "messages": rows,
-        "overhead": _overhead_breakdown(agent_name),
+        "overhead": _overhead_breakdown(agent_name, role_name),
     }
 
 
@@ -522,12 +528,13 @@ async def context_current(
     agent: str = "default",
     format: str = "json",
     maxChars: int = 500,
+    role: str = "",
 ):
     """Debug view: the exact context the next prompt will feed the model."""
     if not sessionId:
         return {"ok": False, "error": "missing sessionId"}
     report = await asyncio.to_thread(
-        _build_context_report, sessionId, agent, max(0, int(maxChars))
+        _build_context_report, sessionId, agent, max(0, int(maxChars)), role
     )
     if format.lower() == "html":
         return HTMLResponse(_html_context_report(report))

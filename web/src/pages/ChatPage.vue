@@ -1075,7 +1075,8 @@ function viewContext() {
   const conversation = currentConversation.value
   if (!conversation) return
   const sid = conversation.agentSessionId ?? conversation.id
-  const url = `/api/context/current?sessionId=${encodeURIComponent(sid)}&format=html`
+  const roleParam = systemOverrideName.value ? `&role=${encodeURIComponent(systemOverrideName.value)}` : ''
+  const url = `/api/context/current?sessionId=${encodeURIComponent(sid)}&format=html${roleParam}`
   window.open(url, '_blank', 'width=1200,height=800,noopener=true')
 }
 
