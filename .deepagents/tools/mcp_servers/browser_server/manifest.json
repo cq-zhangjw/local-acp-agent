@@ -254,6 +254,180 @@
           "tags": []
         }
       }
+    },
+    {
+      "name": "search_web",
+      "title": "Search Web",
+      "description": "Search the web (Bing CN or Baidu) and return top results.\n\nFree, no API key. Use this when the user asks for up-to-date info, news,\nor anything beyond your training cutoff. Bing is default; switch to\n\"baidu\" if Bing results are insufficient for Chinese queries.",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "search keywords, e.g. \"2026年最新 AI Agent 框架对比\""
+          },
+          "engine": {
+            "default": "bing",
+            "type": "string",
+            "description": "\"bing\" (default) or \"baidu\""
+          },
+          "max_results": {
+            "default": 8,
+            "type": "integer",
+            "description": "number of results to return (default 8, max 15)"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "http_request",
+      "title": "Http Request",
+      "description": "Send an arbitrary HTTP request and return status + body (truncated).",
+      "inputSchema": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "description": "GET / POST / PUT / PATCH / DELETE / HEAD"
+          },
+          "url": {
+            "type": "string",
+            "description": "target URL (http/https only)"
+          },
+          "headers": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "optional extra headers dict"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "optional request body string"
+          },
+          "timeout": {
+            "default": 15.0,
+            "type": "number",
+            "description": "seconds"
+          },
+          "max_bytes": {
+            "default": 100000,
+            "type": "integer",
+            "description": "max response body bytes (<=0 unlimited)"
+          }
+        },
+        "required": [
+          "method",
+          "url"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "fetch_webpage",
+      "title": "Fetch Webpage",
+      "description": "Fetch a URL via GET and return the raw HTML source (truncated).",
+      "inputSchema": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "target URL (http/https only)"
+          },
+          "max_bytes": {
+            "default": 20000,
+            "type": "integer",
+            "description": "max returned bytes (<=0 unlimited)"
+          },
+          "timeout": {
+            "default": 15.0,
+            "type": "number",
+            "description": "seconds"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
     }
   ],
   "prompts": [],

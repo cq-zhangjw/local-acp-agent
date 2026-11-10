@@ -403,19 +403,20 @@ def build_agent(
             web_search=os.getenv("WEB_SEARCH", "").strip() == "1",
         )
         # Optional web search (toggled from the composer): inject the
-        # web_search_server MCP tool and instruct the model to search first.
+        # Load browser_server's search_web tool and instruct the model to search first.
         if os.getenv("WEB_SEARCH", "").strip() == "1":
             try:
                 from utils.mcp_loader import _holder, make_tool, load_agents_config
                 cfg = load_agents_config()
-                ws_entry = next(
-                    (e for e in (cfg.get("default", {}).get("tools", {}).get("mcp_tools") or []) if e.get("server") == "web_search_server"),
+                bs_entry = next(
+                    (e for e in (cfg.get("default", {}).get("tools", {}).get("mcp_tools") or []) if e.get("server") == "browser_server"),
                     None,
                 )
-                if ws_entry:
-                    holder = _holder("web_search_server")
-                    for tm in ws_entry.get("tools") or []:
-                        chat_tools.append(make_tool(holder, tm))
+                if bs_entry:
+                    holder = _holder("browser_server")
+                    for tm in bs_entry.get("tools") or []:
+                        if tm.get("name") == "search_web":
+                            chat_tools.append(make_tool(holder, tm))
                     chat_system_prompt += (
                         "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
                         "先用 search_web 工具把问题转成关键词搜索（中文问题用中文关键词），"

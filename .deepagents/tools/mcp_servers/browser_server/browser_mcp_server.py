@@ -1,10 +1,14 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 import traceback
 from pathlib import Path
+from urllib.parse import urlparse
+
+import httpx
 from fastmcp import FastMCP
 
 from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
@@ -623,6 +627,149 @@ async def do_automation_by_script(script_param_file: str, wait_user: bool = True
         return f"Do automation completed. {len(pages)} page(s) open."
     except:
         return f"Error: {traceback.format_exc()}"
+
+
+# ---------- Lightweight HTTP / search tools (merged from web_assistant_server) ----------
+
+_ALLOWED_SCHEMES = {"http", "https"}
+_DEFAULT_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+)
+
+
+def _check_url(url: str) -> None:
+    scheme = urlparse(url).scheme.lower()
+    if scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"only http/https URLs are allowed, got scheme {scheme!r}")
+
+
+def _truncate(text: str, max_bytes: int) -> str:
+    if not text or max_bytes <= 0:
+        return text
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) <= max_bytes:
+        return text
+    cut = encoded[:max_bytes].decode("utf-8", errors="replace")
+    return f"{cut}\n\n[... output truncated at {max_bytes} bytes ...]"
+
+
+async def _http_get(url: str, timeout: float = 15.0) -> str:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout),
+        follow_redirects=True,
+        headers={"User-Agent": _DEFAULT_UA},
+        verify=False,
+    ) as client:
+        resp = await client.get(url)
+        return resp.text or ""
+
+
+@mcp.tool()
+async def search_web(query: str, engine: str = "bing", max_results: int = 8) -> str:
+    """Search the web (Bing CN or Baidu) and return top results.
+
+    Free, no API key. Use this when the user asks for up-to-date info, news,
+    or anything beyond your training cutoff. Bing is default; switch to
+    "baidu" if Bing results are insufficient for Chinese queries.
+
+    Args:
+        query: search keywords, e.g. "2026年最新 AI Agent 框架对比"
+        engine: "bing" (default) or "baidu"
+        max_results: number of results to return (default 8, max 15)
+    """
+    try:
+        max_results = max(1, min(int(max_results), 15))
+        if engine == "baidu":
+            html = await _http_get(f"https://www.baidu.com/s?wd={query}&rn={max_results}")
+            results = []
+            for m in re.finditer(r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>', html, re.S | re.I):
+                title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+                if title:
+                    results.append({"title": title, "url": m.group(1), "snippet": ""})
+        else:
+            html = await _http_get(f"https://cn.bing.com/search?q={query}")
+            results = []
+            for m in re.finditer(r'<li class="b_algo".*?</li>', html, re.S):
+                block = m.group(0)
+                t = re.search(r"<h2>(.*?)</h2>", block, re.S)
+                u = re.search(r'<a[^>]*href="(http[^"]+)"', block)
+                s = re.search(r'<p[^>]*>(.*?)</p>', block, re.S)
+                if t and u:
+                    results.append({
+                        "title": re.sub(r"<[^>]+>", "", t.group(1)).strip(),
+                        "url": u.group(1),
+                        "snippet": re.sub(r"<[^>]+>", "", s.group(1)).strip() if s else "",
+                    })
+        results = results[:max_results]
+        if not results:
+            return f"No results for '{query}' (engine={engine}). Try the other engine."
+        lines = [f"=== Web results for: {query} ({engine}) ==="]
+        for i, r in enumerate(results, 1):
+            lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}")
+        return "\n\n".join(lines)
+    except Exception:
+        return f"Error: {traceback.format_exc()}"
+
+
+@mcp.tool()
+async def http_request(
+    method: str,
+    url: str,
+    headers: dict | None = None,
+    body: str | None = None,
+    timeout: float = 15.0,
+    max_bytes: int = 100000,
+) -> str:
+    """Send an arbitrary HTTP request and return status + body (truncated).
+
+    Args:
+        method: GET / POST / PUT / PATCH / DELETE / HEAD
+        url: target URL (http/https only)
+        headers: optional extra headers dict
+        body: optional request body string
+        timeout: seconds
+        max_bytes: max response body bytes (<=0 unlimited)
+    """
+    try:
+        _check_url(url)
+        method = (method or "GET").upper()
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout),
+            follow_redirects=True,
+            headers={"User-Agent": _DEFAULT_UA},
+            verify=False,
+        ) as client:
+            resp = await client.request(method, url, headers=headers, content=body)
+            return json.dumps(
+                {
+                    "ok": True,
+                    "status_code": resp.status_code,
+                    "content_type": resp.headers.get("content-type", ""),
+                    "final_url": str(resp.url),
+                    "body": _truncate(resp.text or "", max_bytes),
+                },
+                ensure_ascii=False,
+            )
+    except Exception as e:
+        return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def fetch_webpage(url: str, max_bytes: int = 20000, timeout: float = 15.0) -> str:
+    """Fetch a URL via GET and return the raw HTML source (truncated).
+
+    Args:
+        url: target URL (http/https only)
+        max_bytes: max returned bytes (<=0 unlimited)
+        timeout: seconds
+    """
+    try:
+        _check_url(url)
+        text = await _http_get(url, timeout)
+        return _truncate(text, max_bytes)
+    except Exception as e:
+        return f"Error fetching {url}: {type(e).__name__}: {e}"
 
 
 if __name__ == '__main__':
