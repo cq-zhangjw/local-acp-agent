@@ -684,9 +684,11 @@ function selectConversation(id: string) {
     resetSocketForAgentChange()
   }
   // Restore per-session chat toggles
+  let needReconnect = false
   if (modeConv?.webSearchOn !== undefined && modeConv.webSearchOn !== webSearchOn.value) {
     webSearchOn.value = modeConv.webSearchOn
     localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(modeConv.webSearchOn))
+    needReconnect = true
   }
   if (modeConv?.historyOn !== undefined && modeConv.historyOn !== historyOn.value) {
     historyOn.value = modeConv.historyOn
@@ -697,17 +699,21 @@ function selectConversation(id: string) {
     localStorage.setItem(JP_MARK_STORAGE_KEY, String(modeConv.jpMarkOn))
   }
   // Restore per-session role preset
-  const convRole = modeConv?.roleName
-  if (convRole) {
-    const r = systemCommands.value.find((x: any) => x.name === convRole)
-    if (r) {
-      systemOverride.value = r.content
-      systemOverrideName.value = r.name
+  const convRole = modeConv?.roleName || ''
+  if (convRole !== systemOverrideName.value) {
+    if (convRole) {
+      const r = systemCommands.value.find((x: any) => x.name === convRole)
+      if (r) {
+        systemOverride.value = r.content
+        systemOverrideName.value = r.name
+      }
+    } else {
+      systemOverride.value = ''
+      systemOverrideName.value = ''
     }
-  } else {
-    systemOverride.value = ''
-    systemOverrideName.value = ''
+    needReconnect = true
   }
+  if (needReconnect) resetSocketForAgentChange()
   contextOverride.value = null // usage is per-session; refreshed after history load
   messageWindowSize.value = MESSAGE_WINDOW
   attachments.value = []
