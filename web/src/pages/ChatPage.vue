@@ -594,8 +594,8 @@ function createConversation(mode: 'chat' | 'task' = 'task') {
   localStorage.setItem(WEB_SEARCH_STORAGE_KEY, 'true')
   localStorage.setItem(HISTORY_STORAGE_KEY, 'true')
   localStorage.setItem(JP_MARK_STORAGE_KEY, 'true')
-  systemOverride.value = ''
-  systemOverrideName.value = ''
+  // NOTE: don't clear systemOverride — user may have picked a role on the
+  // welcome page before sending; it should carry into the new conversation.
   // Sidebar grouping: show the matching group, collapse the other.
   chatCollapsed.value = mode !== 'chat'
   agentCollapsed.value = mode === 'chat'
