@@ -46,6 +46,7 @@ class QuickCommandIn(BaseModel):
     role: str = ""  # associated role preset name; empty = no role
     webSearchOn: bool = True
     historyOn: bool = True
+    jpMarkOn: bool = True
 
 
 @router.get("/api/quick-commands")

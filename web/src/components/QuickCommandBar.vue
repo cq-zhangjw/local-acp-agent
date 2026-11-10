@@ -29,7 +29,7 @@ const emit = defineEmits<{
 const list = ref<QuickCommand[]>([])
 const showModal = ref(false)
 const editing = ref<QuickCommand | null>(null)
-const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false, role: '', webSearchOn: true, historyOn: true })
+const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false, role: '', webSearchOn: true, historyOn: true, jpMarkOn: true })
 const roleOptions = ref<{ label: string; value: string }[]>([])
 
 async function loadRoles() {
@@ -67,14 +67,14 @@ async function load() {
 
 function openNew() {
   editing.value = null
-  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true }
+  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true, jpMarkOn: true }
   showModal.value = true
 }
 
 function openNewRole() {
   // Not used in new architecture; kept for API compat.
   editing.value = null
-  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true }
+  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true, jpMarkOn: true }
   showModal.value = true
 }
 
@@ -90,6 +90,7 @@ function openNewWithContent(text: string) {
     role: '',
     webSearchOn: true,
     historyOn: true,
+    jpMarkOn: true,
   }
   showModal.value = true
 }
@@ -98,7 +99,7 @@ defineExpose({ openNew, openNewWithContent, openNewRole })
 
 function openEdit(cmd: QuickCommand) {
   editing.value = cmd
-  form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend, role: cmd.role || '', webSearchOn: cmd.webSearchOn !== false, historyOn: cmd.historyOn !== false }
+  form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend, role: cmd.role || '', webSearchOn: cmd.webSearchOn !== false, historyOn: cmd.historyOn !== false, jpMarkOn: cmd.jpMarkOn !== false }
   showModal.value = true
 }
 
@@ -150,6 +151,7 @@ onMounted(() => { load(); loadRoles() })
           <NTag size="tiny" :bordered="false" :type="cmd.mode === 'chat' ? 'success' : 'warning'">{{ cmd.mode === 'chat' ? 'Chat' : 'Task' }}</NTag>
           <NTag v-if="cmd.webSearchOn" size="tiny" :bordered="false" type="info">🌐</NTag>
           <NTag v-if="cmd.historyOn" size="tiny" :bordered="false" type="info">📜</NTag>
+          <NTag v-if="cmd.jpMarkOn" size="tiny" :bordered="false" type="info">あ</NTag>
           <NTag v-if="cmd.role" size="tiny" :bordered="false" type="warning">👤 {{ cmd.role }}</NTag>
         </div>
       </div>
@@ -188,6 +190,10 @@ onMounted(() => { load(); loadRoles() })
           </div>
         </template>
         <div class="qc-row">
+          <div class="qc-col qc-col-switch-inline">
+            <label>日语注音</label>
+            <NSwitch v-model:value="form.jpMarkOn" size="small" />
+          </div>
           <div class="qc-col qc-col-switch-inline">
             <label>自动发送</label>
             <NSwitch v-model:value="form.autoSend" size="small" />

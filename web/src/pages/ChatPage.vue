@@ -164,6 +164,8 @@ interface Conversation {
   historyOn?: boolean
   /** Per-session active role preset name. */
   roleName?: string
+  /** Per-session jp auto-mark toggle. */
+  jpMarkOn?: boolean
 }
 
 interface TodoItem {
@@ -685,6 +687,10 @@ function selectConversation(id: string) {
     historyOn.value = modeConv.historyOn
     localStorage.setItem(HISTORY_STORAGE_KEY, String(modeConv.historyOn))
   }
+  if (modeConv?.jpMarkOn !== undefined && modeConv.jpMarkOn !== jpMarkOn.value) {
+    jpMarkOn.value = modeConv.jpMarkOn
+    localStorage.setItem(JP_MARK_STORAGE_KEY, String(modeConv.jpMarkOn))
+  }
   // Restore per-session role preset
   const convRole = modeConv?.roleName
   if (convRole) {
@@ -1085,6 +1091,8 @@ const historyOn = ref(localStorage.getItem(HISTORY_STORAGE_KEY) !== 'false') // 
 /** 联网搜索开关（仅 Chat 模式）：开启时先搜网再回答。 */
 const WEB_SEARCH_STORAGE_KEY = 'chat_web_search_on'
 const webSearchOn = ref(localStorage.getItem(WEB_SEARCH_STORAGE_KEY) !== 'false') // 默认开
+const JP_MARK_STORAGE_KEY = 'chat_jp_mark_on'
+const jpMarkOn = ref(localStorage.getItem(JP_MARK_STORAGE_KEY) !== 'false') // 默认开
 
 /** System-prompt override set by clicking a "system" quick command. Prepended to every prompt until cleared. */
 const systemOverride = ref('')
@@ -2705,6 +2713,10 @@ async function onQuickCommand(cmd: any) {
       historyOn.value = cmd.historyOn
       localStorage.setItem(HISTORY_STORAGE_KEY, String(cmd.historyOn))
     }
+    if (cmd.jpMarkOn !== undefined && cmd.jpMarkOn !== jpMarkOn.value) {
+      jpMarkOn.value = cmd.jpMarkOn
+      localStorage.setItem(JP_MARK_STORAGE_KEY, String(cmd.jpMarkOn))
+    }
     if (needReconnect) resetSocketForAgentChange()
   }
   input.value = cmd.content
@@ -2810,6 +2822,7 @@ async function submitPrompt() {
   conversation.webSearchOn = webSearchOn.value
   conversation.historyOn = historyOn.value
   conversation.roleName = systemOverrideName.value
+  conversation.jpMarkOn = jpMarkOn.value
   moveConversationToTop(conversation)
   input.value = ''
   attachments.value = []
@@ -3035,6 +3048,7 @@ function toggleSpeakReply() {
 // 只作用于「本次完成」的回复；历史消息不批量请求。原始 finalText 不变，
 // 复制/编辑/TTS 仍走原文。后端只对含假名的片段注音，非日语部分转义。
 async function autoJpMark(assistant: AssistantMessage) {
+  if (!jpMarkOn.value) return
   if (!assistant.finalText) return
   // 快速预筛：无假名直接跳过，避免无谓请求
   if (!/[\u3040-\u30ff]/.test(assistant.finalText)) return
@@ -4141,6 +4155,21 @@ onBeforeUnmount(() => {
                       </NButton>
                     </template>
                     {{ actionLabels.webSearch }}
+                  </NTooltip>
+                  <NTooltip v-if="toolbarChatMode">
+                    <template #trigger>
+                      <NButton
+                        quaternary size="small"
+                        class="toolbar-pill"
+                        :class="{ 'toolbar-pill--on': jpMarkOn }"
+                        aria-label="日语注音"
+                        @click="jpMarkOn = !jpMarkOn; localStorage.setItem(JP_MARK_STORAGE_KEY, String(jpMarkOn)); focusComposer()"
+                      >
+                        <template #icon><NIcon :component="LanguageOutline" /></template>
+                        注音
+                      </NButton>
+                    </template>
+                    日语汉字自动注音
                   </NTooltip>
                   <div v-if="toolbarChatMode" style="position:relative;display:inline-block;">
                     <NButton
