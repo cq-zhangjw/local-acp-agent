@@ -43,3 +43,9 @@ lxml>=6.1.3
 requests-ntlm==1.3.0
 pyspnego>=0.12.4
 sspilib>=0.6.0
+
+# Japanese furigana annotation (jp_mark / jp_assistant MCP)
+# MeCab needs a system C++ runtime; on Windows use pip install mecab-python3
+mecab-python3
+ipadic
+jaconv
