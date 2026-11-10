@@ -361,7 +361,13 @@ def build_agent(
         # conversational model with no local file or shell access.
         chat_backend = StateBackend()
         chat_tools = []
-        chat_system_prompt = f"{get_system_prompt('Chat')}\n\n"
+        # Role preset (if selected) becomes the top of the system prompt — a
+        # real system message, not prepended to the user turn.
+        role_prompt = os.getenv("ROLE_PROMPT", "").strip()
+        chat_system_prompt = ""
+        if role_prompt:
+            chat_system_prompt += role_prompt + "\n\n"
+        chat_system_prompt += f"{get_system_prompt('Chat')}\n\n"
         # Optional web search (toggled from the composer): inject the
         # web_search_server MCP tool and instruct the model to search first.
         if os.getenv("WEB_SEARCH", "").strip() == "1":

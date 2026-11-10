@@ -438,6 +438,11 @@ async def acp_bridge(websocket: WebSocket):
     web_search = websocket.query_params.get("web_search", "") or ""
     if web_search:
         agent_env["WEB_SEARCH"] = web_search
+    role_name = websocket.query_params.get("role", "") or ""
+    if role_name:
+        role_file = BASE_DIR / ".deepagents" / "roles" / f"{role_name}.md"
+        if role_file.exists():
+            agent_env["ROLE_PROMPT"] = role_file.read_text(encoding="utf-8")
     proc = await asyncio.create_subprocess_exec(
         *AGENT_CMD,
         stdin=subprocess.PIPE,

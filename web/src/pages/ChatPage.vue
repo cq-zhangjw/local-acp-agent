@@ -2214,7 +2214,8 @@ function websocketUrl() {
   const model = currentModel.value || ''
   const modelParam = model ? `&model=${encodeURIComponent(model)}` : ''
   const wsParam = (webSearchOn.value && agent === 'Chat') ? '&web_search=1' : ''
-  return `${protocol}//${window.location.host}/acp-ws?agent=${encodeURIComponent(agent)}${modelParam}${wsParam}`
+  const roleParam = systemOverrideName.value ? `&role=${encodeURIComponent(systemOverrideName.value)}` : ''
+  return `${protocol}//${window.location.host}/acp-ws?agent=${encodeURIComponent(agent)}${modelParam}${wsParam}${roleParam}`
 }
 
 function connect() {
@@ -2610,7 +2611,7 @@ async function sendAgentPrompt(
     }
 
     const promptLines: string[] = []
-    if (systemOverride.value) promptLines.push(`[系统预设] ${systemOverride.value}`)
+    // Role preset is injected as a real system message via ws ?role=..., not prepended to user prompt.
     if (text) promptLines.push(text)
     const imageBlocks: Array<Record<string, unknown>> = []
     for (const resource of uploaded) {
@@ -2747,12 +2748,14 @@ function chooseRole(cmd: any) {
   systemOverride.value = cmd.content
   systemOverrideName.value = cmd.name
   showRolePresets.value = false
+  resetSocketForAgentChange()
   message.success(`已启用角色：${cmd.name}`)
 }
 function clearRole() {
   systemOverride.value = ''
   systemOverrideName.value = ''
   showRolePresets.value = false
+  resetSocketForAgentChange()
 }
 
 // Role editor state
