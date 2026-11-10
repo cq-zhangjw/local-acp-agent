@@ -258,7 +258,7 @@ onUpdated(enhanceMarkdown)
 
 <style scoped>
 .markdown-message { color: #1d2733; font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
-.markdown-message :deep(ruby rt) { user-select: none; font-size: 0.65em; color: #94a3b8; }
+.markdown-message :deep(ruby rt) { user-select: none; font-size: .85em; color: #4a4e53; }
 .markdown-message :deep(img) { display: block; max-width: 100%; height: auto; margin: 12px 0; border-radius: 8px; border: 1px solid #e4e8ee; }
 .markdown-message :deep(p) { margin: 0 0 12px; } .markdown-message :deep(p:last-child) { margin-bottom: 0; }
 .markdown-message :deep(h1),.markdown-message :deep(h2),.markdown-message :deep(h3) { margin: 20px 0 10px; line-height: 1.35; } .markdown-message :deep(h1) { font-size: 20px; } .markdown-message :deep(h2) { font-size: 17px; } .markdown-message :deep(h3) { font-size: 15px; }
