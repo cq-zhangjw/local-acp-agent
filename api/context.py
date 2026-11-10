@@ -227,17 +227,21 @@ def _overhead_breakdown(agent_name: str, role_name: str = "") -> dict:
     system prompt + tool schemas. These are never compacted, but they DO count
     against content_size, so the debug view should show them explicitly.
     """
-    # system prompt (reuse acp_agent's loader so Chat vs Default logic matches)
-    sp_parts = []
-    if role_name:
-        role_file = Path(__file__).resolve().parent.parent / ".deepagents" / "roles" / f"{role_name}.md"
-        if role_file.exists():
-            sp_parts.append(f"[角色预设：{role_name}]\n" + role_file.read_text(encoding="utf-8"))
+    # system prompt: read the actual one written by acp_agent at startup,
+    # so the debug view shows exactly what the model receives (role + base
+    # + web_search hints, not a re-assembled approximation).
+    sp_text = ""
     try:
-        sp_parts.append(_acp.get_system_prompt(agent_name) or "")
+        sp_file = Path(__file__).resolve().parent.parent / ".deepagents" / ".current_system_prompt.txt"
+        if sp_file.exists():
+            sp_text = sp_file.read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass
-    sp_text = "\n\n".join(p for p in sp_parts if p)
+    if not sp_text:
+        try:
+            sp_text = _acp.get_system_prompt(agent_name) or ""
+        except Exception:  # noqa: BLE001
+            sp_text = ""
     sp_tokens = round(estimate_text_tokens(sp_text))
 
     # tools: inner_tools (built-in deepagents) + mcp_tools (from agents.json)

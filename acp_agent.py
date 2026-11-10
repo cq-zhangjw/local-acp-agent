@@ -391,6 +391,12 @@ def build_agent(
             except Exception as e:  # noqa: BLE001
                 import logging
                 logging.getLogger(__name__).warning("web_search inject failed: %s", e)
+        # Persist the actual system prompt used so /api/context/current can show it.
+        try:
+            from pathlib import Path as _P
+            (_P(".deepagents") / ".current_system_prompt.txt").write_text(chat_system_prompt, encoding="utf-8")
+        except Exception:
+            pass
         agent = create_deep_agent(
             model=create_model(),
             tools=chat_tools,
