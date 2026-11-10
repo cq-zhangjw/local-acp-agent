@@ -3050,6 +3050,9 @@ async function autoJpMark(assistant: AssistantMessage) {
       const textSegment = assistant.segments.find((segment) => segment.type === 'text')
       if (textSegment && textSegment.text === assistant.finalText) {
         textSegment.html = data.html
+        // Persist immediately — the user might switch away before the next saveConversation.
+        const conv = conversations.value.find((c) => c.messages.some((m) => m.id === assistant.id))
+        if (conv) void saveConversation(conv)
       }
     }
   } catch {
