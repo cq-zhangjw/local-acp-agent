@@ -8,5 +8,15 @@
     "max_tokens": 20480,
     "top_p": 0.5,
     "content_size": 262144
+  },
+  {
+    "model_name": "bonsai2-abl",
+    "model_provider": "openai",
+    "endpoint": "http://127.0.0.1:8088/v1",
+    "api_key": "-",
+    "temperature": 0.1,
+    "max_tokens": 20480,
+    "top_p": 0.5,
+    "content_size": 262144
   }
 ]

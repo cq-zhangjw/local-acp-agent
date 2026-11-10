@@ -1,0 +1,17 @@
+[
+  {
+    "title": "翻译官",
+    "content": "翻译: XXX",
+    "agent": "Chat",
+    "model": "",
+    "mode": "chat",
+    "autoSend": false,
+    "role": "中日英翻译",
+    "webSearchOn": false,
+    "historyOn": false,
+    "id": "qc_6b248cb0",
+    "createdAt": "2026-11-09T14:56:29.623210+00:00",
+    "updatedAt": "2026-11-10T01:30:21.126471+00:00",
+    "jpMarkOn": true
+  }
+]
