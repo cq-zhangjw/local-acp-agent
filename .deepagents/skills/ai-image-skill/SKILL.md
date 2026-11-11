@@ -44,14 +44,14 @@ if (-not $?) {
 ```powershell
 $modelDir = ".deepagents/skills/ai-image-skill/models/<模型名>"
 if (-not (Test-Path $modelDir)) {
+  # 检查 modelscope 命令，不存在则自动安装
+  if (-not (Get-Command modelscope -ErrorAction SilentlyContinue)) {
+    pip install modelscope
+  }
   # 用 modelscope 下载
   modelscope download --model <modelscope模型ID> --local_dir $modelDir
 }
 ```
-
-> modelscope 模型 ID 待补充。
-
-如果 modelscope 命令不存在，提示用户 `pip install modelscope`。
 
 ### 3. 扩写提示词
 
