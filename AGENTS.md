@@ -31,6 +31,18 @@
 - `@+Agent名`：切换 Agent，读对应 Agent 文件后用 task 执行。
 - `#+工具名`：指定工具，确认参数后调用。
 
+# Skills（专用技能）
+
+当用户请求命中以下场景时，**直接 Read 对应 SKILL.md**，不要先 ls/grep 搜索：
+
+| 场景 | Skill 路径 | 触发关键词 |
+|---|---|---|
+| 生成图片、画图、改图、多图融合、海报、插画 | `.deepagents/skills/ai-image-skill/SKILL.md` | 画、生成图片、画一张、海报、插画、改图、融合图片 |
+| 创建新 MCP 工具 | `.deepagents/skills/tool-creator/SKILL.md` | 新建工具、接入 MCP、做一个工具 |
+| 创建新 Agent | `.deepagents/skills/agent-creator/SKILL.md` | 新建 Agent、创建子 Agent |
+
+Read 后按 SKILL.md 的流程执行。
+
 # 系统命令
 
 执行系统命令用 `execute` 工具跑 PowerShell：
