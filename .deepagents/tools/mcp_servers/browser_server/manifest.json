@@ -1,12 +1,12 @@
 {
   "environment": {
-    "fastmcp": "4.1.0",
+    "fastmcp": "4.1.3",
     "mcp": "2.3.0"
   },
   "serverInfo": {
     "name": "browser mcp server",
     "title": null,
-    "version": "4.1.0",
+    "version": "4.1.3",
     "description": null,
     "websiteUrl": null,
     "icons": null
@@ -258,7 +258,7 @@
     {
       "name": "search_web",
       "title": "Search Web",
-      "description": "Search the web (Bing CN or Baidu) and return top results.\n\nUse this when the user asks for up-to-date info, news, or anything beyond\nyour training cutoff. Search at most 10 times per conversation; if you\nstill find nothing useful, tell the user and answer from your own knowledge.",
+      "description": "Search the web (Baidu, Bing or Sogou) and return top results.\n\nUse this when the user asks for up-to-date info, news, or anything beyond\nyour training cutoff. Search at most 10 times per conversation; if you\nstill find nothing useful, tell the user and answer from your own knowledge.\nIf the chosen engine is blocked or empty, the other engines are tried automatically.",
       "inputSchema": {
         "properties": {
           "query": {
@@ -282,9 +282,9 @@
             "description": "optional list of independent queries to run in one batch\n(e.g. [\"产品A 价格\", \"产品B 价格\"]). Leave empty for a single search."
           },
           "engine": {
-            "default": "bing",
+            "default": "baidu",
             "type": "string",
-            "description": "\"bing\" (default) or \"baidu\""
+            "description": "\"baidu\" (default), \"bing\" or \"sogou\""
           },
           "max_results": {
             "default": 8,

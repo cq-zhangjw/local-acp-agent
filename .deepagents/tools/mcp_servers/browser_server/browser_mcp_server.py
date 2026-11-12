@@ -6,12 +6,12 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 from fastmcp import FastMCP
 
-from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 # Make the project root importable: this MCP server runs as a standalone
 # subprocess whose sys.path contains only this directory, but it needs the
@@ -35,6 +35,11 @@ script_path = os.path.dirname(__file__)
 
 browser: BrowserContext = None
 playwright: Playwright = None
+# Separate headless browser used only by search_web; shares the global playwright.
+_search_browser: Browser = None
+_search_lock = asyncio.Lock()
+_launch_lock = asyncio.Lock()
+_search_contexts: dict[str, BrowserContext] = {}
 
 GLOBAL_TIMEOUT = 5 * 60 * 1000
 storage = {}
@@ -118,7 +123,9 @@ async def init_browser(
     global browser, playwright
     if user_data_dir is not None:
         user_data_dir = os.path.abspath(user_data_dir)
-    playwright = await async_playwright().start()
+    started_here = playwright is None
+    if started_here:
+        playwright = await async_playwright().start()
     try:
         browser = await playwright.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
@@ -145,10 +152,12 @@ async def init_browser(
         # Always stop the driver subprocess, otherwise its transport is
         # finalized after the loop closes and emits a scary-but-harmless
         # "Event loop is closed" warning on shutdown.
-        try:
-            await playwright.stop()
-        except Exception:  # noqa: BLE001 - best effort cleanup
-            pass
+        if started_here:
+            try:
+                await playwright.stop()
+            except Exception:  # noqa: BLE001 - best effort cleanup
+                pass
+            playwright = None
         raise
     return browser
 
@@ -159,12 +168,19 @@ async def close_browser():
     Returns:
         None.
     """
-    global playwright, browser
+    global playwright, browser, _search_browser
     if browser:
         try:
             await browser.close()
         except Exception:  # noqa: BLE001 - best effort
             pass
+    if _search_browser:
+        try:
+            await _search_browser.close()
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+        _search_browser = None
+        _search_contexts.clear()
     if playwright:
         try:
             await playwright.stop()
@@ -181,6 +197,22 @@ async def _ensure_browser(headless=False):
     if playwright is None or browser is None:
         await init_browser(headless=headless)
     return browser
+
+
+async def _ensure_search_browser() -> Browser:
+    """Lazily launch a headless Edge on the global playwright for searching."""
+    global playwright, _search_browser
+    async with _launch_lock:
+        if _search_browser is None or not _search_browser.is_connected():
+            if playwright is None:
+                playwright = await async_playwright().start()
+            _search_contexts.clear()
+            _search_browser = await playwright.chromium.launch(
+                channel="msedge",
+                headless=True,
+                args=['--disable-blink-features=AutomationControlled'],
+            )
+    return _search_browser
 
 
 async def _active_page(page_index=-1):
@@ -665,24 +697,130 @@ async def _http_get(url: str, timeout: float = 15.0) -> str:
         return resp.text or ""
 
 
+_SEARCH_ENGINES = {
+    # name: (home page for cookie warm-up, result URL template, result selector)
+    "bing": ("https://www.bing.com/", "https://www.bing.com/search?q={q}&setlang=zh-Hans", "li.b_algo"),
+    "baidu": ("https://www.baidu.com/", "https://www.baidu.com/s?wd={q}&rn={n}", "#content_left h3"),
+    "sogou": ("https://www.sogou.com/", "https://www.sogou.com/web?query={q}", ".vrwrap h3"),
+}
+
+_STEALTH_JS = "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+
+_BING_EXTRACT_JS = """() => Array.from(document.querySelectorAll('li.b_algo')).map(el => {
+  const a = el.querySelector('h2 a');
+  const p = el.querySelector('.b_caption p, p');
+  return {title: a ? a.innerText.trim() : '', url: a ? a.href : '', snippet: p ? p.innerText.trim() : ''};
+})"""
+
+_BAIDU_EXTRACT_JS = """() => Array.from(document.querySelectorAll('#content_left h3')).map(h => {
+  const a = h.querySelector('a');
+  const box = h.closest('.result, .c-container, [class*="result"]') || h.parentElement;
+  const s = box ? box.querySelector('[class*="abstract"], [class*="summary"], [class*="content-right"]') : null;
+  return {title: h.innerText.trim(), url: a ? a.href : '', snippet: s ? s.innerText.trim() : ''};
+})"""
+
+_SOGOU_EXTRACT_JS = """() => Array.from(document.querySelectorAll('.vrwrap')).map(el => {
+  const h = el.querySelector('h3');
+  const a = h ? h.querySelector('a') : null;
+  const s = el.querySelector('.space-txt, .star-wiki, .str_info, .text-layout, p');
+  return {title: h ? h.innerText.trim() : '', url: a ? a.href : '', snippet: s ? s.innerText.trim() : ''};
+})"""
+
+_EXTRACTORS = {"bing": _BING_EXTRACT_JS, "baidu": _BAIDU_EXTRACT_JS, "sogou": _SOGOU_EXTRACT_JS}
+
+
+async def _search_context(engine: str) -> BrowserContext:
+    """Per-engine headless context, kept alive so warm-up cookies are reused."""
+    search_browser = await _ensure_search_browser()
+    ctx = _search_contexts.get(engine)
+    if ctx is not None:
+        return ctx
+    # Bing's Cloudflare check rejects a UA that mismatches the real Edge client
+    # hints, while Baidu/Sogou reject the default "HeadlessChrome" UA.
+    if engine == "bing":
+        probe = await search_browser.new_context()
+        try:
+            probe_page = await probe.new_page()
+            ua = (await probe_page.evaluate("navigator.userAgent")).replace("HeadlessChrome", "Chrome")
+        finally:
+            await probe.close()
+    else:
+        ua = _DEFAULT_UA
+    ctx = await search_browser.new_context(locale="zh-CN", user_agent=ua)
+    await ctx.add_init_script(_STEALTH_JS)
+    # Visiting the home page first gets the cookies that keep Baidu from showing a captcha.
+    page = await ctx.new_page()
+    try:
+        await page.goto(_SEARCH_ENGINES[engine][0], wait_until="domcontentloaded", timeout=15000)
+        await page.wait_for_timeout(800)
+    except Exception:  # noqa: BLE001 - warm-up is best effort
+        pass
+    finally:
+        await page.close()
+    _search_contexts[engine] = ctx
+    return ctx
+
+
+async def _drop_search_context(engine: str) -> None:
+    ctx = _search_contexts.pop(engine, None)
+    if ctx is not None:
+        try:
+            await ctx.close()
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
+
+async def _search_once(engine: str, q: str, max_results: int) -> tuple[list[dict], str]:
+    """Search one engine; returns (results, failure reason)."""
+    _, url_tpl, wait_sel = _SEARCH_ENGINES[engine]
+    async with _search_lock:
+        ctx = await _search_context(engine)
+        page = await ctx.new_page()
+        try:
+            await page.goto(
+                url_tpl.format(q=quote_plus(q), n=max_results),
+                wait_until="domcontentloaded",
+                timeout=20000,
+            )
+            try:
+                # Bing's Cloudflare check can take a few seconds to resolve on its own.
+                await page.wait_for_selector(wait_sel, timeout=15000 if engine == "bing" else 8000)
+            except Exception:  # noqa: BLE001 - no results / blocked page
+                pass
+            results = await page.evaluate(_EXTRACTORS[engine])
+            results = [r for r in results if r["title"] and r["url"]][:max_results]
+            if results:
+                return results, ""
+            title = await page.title()
+            blocked = "captcha" in page.url or "challenges.cloudflare" in " ".join(f.url for f in page.frames) or "验证" in title
+            if blocked:
+                await _drop_search_context(engine)  # retry next time with fresh cookies
+            return [], ("blocked by captcha/verification" if blocked else "no matching results")
+        except Exception as e:  # noqa: BLE001
+            return [], f"{type(e).__name__}: {e}"
+        finally:
+            await page.close()
+
+
 @mcp.tool()
 async def search_web(
     query: str = "",
     queries: list[str] | None = None,
-    engine: str = "bing",
+    engine: str = "baidu",
     max_results: int = 8,
 ) -> str:
-    """Search the web (Bing CN or Baidu) and return top results.
+    """Search the web (Baidu, Bing or Sogou) and return top results.
 
     Use this when the user asks for up-to-date info, news, or anything beyond
     your training cutoff. Search at most 10 times per conversation; if you
     still find nothing useful, tell the user and answer from your own knowledge.
+    If the chosen engine is blocked or empty, the other engines are tried automatically.
 
     Args:
         query: single search keywords, e.g. "2026年最新 AI Agent 框架对比"
         queries: optional list of independent queries to run in one batch
             (e.g. ["产品A 价格", "产品B 价格"]). Leave empty for a single search.
-        engine: "bing" (default) or "baidu"
+        engine: "baidu" (default), "bing" or "sogou"
         max_results: results per query (default 8, max 15)
     """
     try:
@@ -692,36 +830,22 @@ async def search_web(
             qs.insert(0, query)
         if not qs:
             return "Error: provide either query or queries."
-        all_results = []
-        for q in qs:
-            if engine == "baidu":
-                html = await _http_get(f"https://www.baidu.com/s?wd={q}&rn={max_results}")
-                results = []
-                for m in re.finditer(r'<h3[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>\s*</h3>', html, re.S | re.I):
-                    title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
-                    if title:
-                        results.append({"title": title, "url": m.group(1), "snippet": ""})
-            else:
-                html = await _http_get(f"https://cn.bing.com/search?q={q}")
-                results = []
-                for m in re.finditer(r'<li class="b_algo".*?</li>', html, re.S):
-                    block = m.group(0)
-                    t = re.search(r"<h2>(.*?)</h2>", block, re.S)
-                    u = re.search(r'<a[^>]*href="(http[^"]+)"', block)
-                    s = re.search(r'<p[^>]*>(.*?)</p>', block, re.S)
-                    if t and u:
-                        results.append({
-                            "title": re.sub(r"<[^>]+>", "", t.group(1)).strip(),
-                            "url": u.group(1),
-                            "snippet": re.sub(r"<[^>]+>", "", s.group(1)).strip() if s else "",
-                        })
-            all_results.append((q, results[:max_results]))
+        first = engine if engine in _SEARCH_ENGINES else "baidu"
+        order = [first] + [e for e in _SEARCH_ENGINES if e != first]
+
         lines = []
-        for q, results in all_results:
+        for q in qs:
+            used, results, failures = None, [], []
+            for eng in order:
+                results, reason = await _search_once(eng, q, max_results)
+                if results:
+                    used = eng
+                    break
+                failures.append(f"{eng}: {reason}")
             if not results:
-                lines.append(f"=== No results for: {q} ===")
+                lines.append(f"=== No results for: {q} ({'; '.join(failures)}) ===")
                 continue
-            lines.append(f"=== Web results for: {q} ({engine}) ===")
+            lines.append(f"=== Web results for: {q} ({used}) ===")
             for i, r in enumerate(results, 1):
                 lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}")
             lines.append("")
@@ -797,3 +921,5 @@ if __name__ == '__main__':
     sys.stdout = open(sys.stdout.fileno(), "w", encoding="utf-8", closefd=False)
 
     mcp.run(transport="stdio")
+    # result = asyncio.run(search_web(query="2026发布的LLM大语言模型有哪些？"))
+    # print(result)

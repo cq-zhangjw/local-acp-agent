@@ -2303,6 +2303,7 @@ function handleAcpMessage(raw: string) {
   let payload: any
   try {
     payload = JSON.parse(raw)
+    console.log('Received raw ACP message:', raw)
   } catch {
     return
   }
@@ -2405,12 +2406,12 @@ function textFromContent(content: any): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) return content.map(textFromContent).filter(Boolean).join('\n')
   if (typeof content.text === 'string') return content.text
+  if (content.text && typeof content.text.value === 'string') return content.text.value // 兼容特殊结构
   if (content.content) return textFromContent(content.content)
   return ''
 }
 
-// ACP tool_call events only carry a title (e.g. "Read `path`" / "Execute: cmd" / "glob"),
-// with no toolName. Infer the badge name (built-in short name) from title/kind; '' means the Run placeholder.
+// ACP tool_call events only carry a title
 const BUILTIN_TOOL_NAMES = new Set(['read_file', 'write_file', 'edit_file', 'glob', 'grep', 'ls', 'delete', 'task', 'execute'])
 function inferToolName(update: any): string {
   const title = String(update.title ?? '').trim()
@@ -2424,7 +2425,7 @@ function inferToolName(update: any): string {
   if (kind === 'execute') return 'Run'
   return ''
 }
-// body after the badge: strip "Read/Write/Edit/Execute:" prefixes; empty when identical to the badge
+
 function toolDisplayTitle(update: any): string {
   const title = String(update.title ?? '').trim()
   const badge = inferToolName(update)
@@ -2442,24 +2443,55 @@ function normalizeToolStatus(status?: string): ToolStatus {
   return 'running'
 }
 
+// 内部安全获取当前运行消息的 helper
+function getReactiveAssistant(): AssistantMessage | undefined {
+  const items = currentConversation.value?.messages ?? []
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]
+    if (item.role === 'assistant') {
+      // 如果是通过数组拿到的，通常已经是 Proxy 对象了
+      return item as AssistantMessage
+    }
+  }
+  return undefined
+}
+
 function handleSessionUpdate(update: any) {
-  if (restoringHistory.value) return
-  if (cancelRequested) return
-  const assistant = activeAssistantMessage()
-  if (!assistant) return
-  // A cancelled run must ignore any late streaming events, otherwise the
-  // assistant status flips back to streaming and the stop button gets stuck.
-  // Same guard applies once the message is completed/failed: no late event may
-  // resurrect the running state (stop button) after the run is over.
-  if (assistant.status === 'cancelled' || assistant.status === 'completed' || assistant.status === 'failed') return
+  // 1. 全局状态拦截检查
+  if (restoringHistory.value) {
+    console.warn('[ACP Drop] 忽略更新：正在恢复历史记录中 (restoringHistory = true)')
+    return
+  }
+  if (cancelRequested) {
+    console.warn('[ACP Drop] 忽略更新：用户已取消当前请求 (cancelRequested = true)')
+    return
+  }
+  
+  // 2. 获取当前活动的 assistant 消息
+  const assistant = getReactiveAssistant()
+  if (!assistant) {
+    console.warn('[ACP Drop] 忽略更新：未找到 activeAssistantMessage。当前消息数组长度:', currentConversation.value?.messages?.length)
+    return
+  }
+  
+  // 3. 检查消息状态，防止晚到的包污染已结束的会话
+  if (assistant.status === 'cancelled' || assistant.status === 'completed' || assistant.status === 'failed') {
+    // 如果是在被取消后刚刚切回来的些许残留 chunk，静默丢弃，不要刷屏 console
+    return
+  }
+
   const process = assistant.process
   switch (update.sessionUpdate) {
-    case 'agent_message_chunk':
-      assistant.status = 'streaming'
-      closeLastThought(assistant)
-      appendTextSegment(assistant, textFromContent(update.content))
-      scheduleContextRefresh()
+    case 'agent_message_chunk': {
+      const text = textFromContent(update.content)
+      if (text) {
+        assistant.status = 'streaming'
+        closeLastThought(assistant)
+        appendTextSegment(assistant, text)
+        scheduleContextRefresh()
+      }
       break
+    }
     case 'agent_thought_chunk': {
       const text = textFromContent(update.content)
       if (text) {
@@ -2479,7 +2511,7 @@ function handleSessionUpdate(update: any) {
     case 'tool_call':
     case 'tool_call_start': {
       const id = update.toolCallId ?? createId('tool')
-      assistant.status = 'streaming' // keep running during tool calls so the stop button stays
+      assistant.status = 'streaming'
       closeLastThought(assistant)
       scheduleContextRefresh()
       if (!process.toolCalls.some((tool) => tool.id === id)) {
@@ -2508,32 +2540,42 @@ function handleSessionUpdate(update: any) {
       tool.status = normalizeToolStatus(update.status)
       break
     }
+    default:
+      // 处理未知类型，可选打印
+      // console.log('Unhandled session update type:', update.sessionUpdate);
+      break
   }
-  if (!scrollPausedByUser.value) nextTick(scrollToBottom)
+  
+  // 4. 滚动到底部
+  if (!scrollPausedByUser.value) {
+    nextTick(scrollToBottom)
+  }
 }
 
 async function ensureAgentSession(conversation: Conversation, isNewConversation: boolean) {
   if (initializedSessions.has(conversation.id)) return
+  
   if (isNewConversation) {
-    const response = await callAcp('session/new', { sessionId: conversation.id, cwd: '.', mcpServers: [] })
-    if (!response?.sessionId) throw new Error(t('invalidSession'))
-    conversation.agentSessionId = response.sessionId
+    try {
+      restoringHistory.value = true // 新建时也锁住，防止 session/new 响应和 update 乱序
+      const response = await callAcp('session/new', { sessionId: conversation.id, cwd: '.', mcpServers: [] })
+      if (!response?.sessionId) throw new Error(t('invalidSession'))
+      conversation.agentSessionId = response.sessionId
+    } finally {
+      restoringHistory.value = false
+    }
   } else {
     const agentSessionId = conversation.agentSessionId ?? conversation.id
     restoringHistory.value = true
     try {
       await callAcp('session/load', { sessionId: agentSessionId, cwd: '.', mcpServers: [] })
     } catch (error) {
-      // Checkpoint missing (e.g. a conversation migrated from localStorage
-      // before ACP sessions existed, or the checkpoint was pruned): rebuild a
-      // fresh ACP session instead of failing. The conversation's messages are
-      // kept in the history store; only the model-side context starts empty.
       console.warn('[history] ACP session missing, recreating checkpoint:', conversation.id, error)
       const response = await callAcp('session/new', { sessionId: conversation.id, cwd: '.', mcpServers: [] })
       if (!response?.sessionId) throw error
       conversation.agentSessionId = response.sessionId
     } finally {
-      restoringHistory.value = false
+      restoringHistory.value = false // 无论如何都要解锁
     }
   }
   initializedSessions.add(conversation.id)
@@ -2553,9 +2595,9 @@ async function validateStoredSessions() {
     await connect()
     await initialize()
   } catch {
-    // keep local sessions when the backend is offline; retry on next validation
     return
   }
+  
   for (const conversation of conversations.value) {
     if (!conversation.messages.length) continue
     const agentSessionId = conversation.agentSessionId ?? conversation.id
@@ -2564,9 +2606,9 @@ async function validateStoredSessions() {
       await callAcp('session/load', { sessionId: agentSessionId, cwd: '.', mcpServers: [] })
       initializedSessions.add(conversation.id)
     } catch (error) {
-      console.warn('[history] unverifiable session kept (lazy-recreated on send):', conversation.id, error)
+      console.warn('[history] unverifiable session kept:', conversation.id, error)
     } finally {
-      restoringHistory.value = false
+      restoringHistory.value = false // 如果中间抛出未捕获错误，也必须解锁
     }
   }
 }
@@ -2580,31 +2622,27 @@ async function sendAgentPrompt(
   retry = false,
   userMessage?: UserMessage
 ) {
-  // Reset the cancel flag on every prompt path (submit & retry), otherwise a
-  // previous cancel would skip the completed status and leave the stop button stuck.
+  // 重置取消标志位
   cancelRequested = false
-  // The assistantMessage argument is the plain object created by submitPrompt.
-  // Writing to it directly bypasses Vue's reactive proxy (the array element is
-  // wrapped when pushed), so computed state such as isRunning would never
-  // invalidate and the stop button would stay stuck. Always update through the
-  // reactive proxy stored in the conversation array instead.
-  const reactiveAssistant = () => conversation.messages.find((message) => message.id === assistantMessage.id) ?? assistantMessage
+  
+  // 使用 helper 确保拿到的是 Vue 的 Proxy 对象，防止响应式丢失
+  const reactiveAssistant = () => 
+    (conversation.messages.find((message) => message.id === assistantMessage.id) as AssistantMessage) 
+    ?? assistantMessage
+
   try {
     await connect()
     await initialize()
     await ensureAgentSession(conversation, isNewConversation)
     const sessionId = conversation.agentSessionId ?? conversation.id
 
-    // Upload every queued attachment into the MooFile attachment store and
-    // keep only a lightweight placeholder in the prompt, so the conversation
-    // never balloons with base64 / raw bytes. Replays (retry) already carry
-    // file_id + path and are reused as-is.
+    // 上传所有暂存的附件到 MooFile，只保留轻量级的占位符
     const uploaded: AttachmentRef[] = []
     for (const resource of resources) {
       uploaded.push(await uploadResource(resource, sessionId))
     }
-    // Back-fill the persisted user message with the lightweight refs (drop the
-    // in-memory base64/file fields) before saveConversation runs.
+    
+    // 回填持久化的用户消息（只保存引用，丢弃 base64 等大文件数据）
     if (userMessage) {
       const stored = conversation.messages.find((m) => m.id === userMessage.id)
       if (stored && stored.role === 'user') {
@@ -2613,19 +2651,15 @@ async function sendAgentPrompt(
       }
     }
 
+    // 组装 Prompt 文本和图片 Content Block
     const promptLines: string[] = []
-    // Role preset is injected as a real system message via ws ?role=..., not prepended to user prompt.
     if (text) promptLines.push(text)
+    
     const imageBlocks: Array<Record<string, unknown>> = []
     for (const resource of uploaded) {
       if (resource.file_id) {
         const pathHint = resource.path ? `（附件路径：${resource.path}）` : ''
         if (resource.kind === 'image') {
-          // Embed the image bytes directly so the model sees the picture
-          // without read_file: Chat has no filesystem backend (read_file would
-          // return "not found"), and Agent mode would otherwise surface the raw
-          // base64 in the tool card. The conversation keeps only the light ref;
-          // the base64 lives in this transient prompt (same as pre-MooFile).
           promptLines.push(`[图片: ${resource.file_id}]${pathHint}（图片内容已随消息提供，直接分析即可，无需读取文件）`)
           const block = await imageContentBlock(resource)
           if (block) imageBlocks.push(block)
@@ -2633,64 +2667,85 @@ async function sendAgentPrompt(
           promptLines.push(`[文件: ${resource.file_id}]${pathHint}\n请直接使用本地文件工具读取该路径；不要转换为 Windows 路径或 HTTP 地址。`)
         }
       } else if (resource.path || resource.uri) {
-        // Legacy attachments (pre attachment-store): keep the old virtual-path hint.
         promptLines.push(`附件虚拟路径：${resource.path ?? resource.uri}\n请直接使用本地文件工具读取该路径；不要转换为 Windows 路径或 HTTP 地址。`)
       }
     }
+    
     const promptText = promptLines.filter(Boolean).join('\n\n')
     const content: Array<Record<string, unknown>> = []
     if (promptText) {
       content.push({ type: 'text', text: promptText })
     }
     content.push(...imageBlocks)
-    cancelRequested = false // reset the cancel flag for a new run
-    // retry re-sends the same user text with _meta.retry so the backend rolls the
-    // checkpoint back by one turn before re-answering (no stitching on the old reply);
-    // history_on 随每条消息携带（全局偏好，关=后端只播种当前这一条消息）
+    
+    // 发送请求
     const meta: Record<string, unknown> = { history_on: historyOn.value }
     if (retry) meta.retry = true
+    
     await callAcp('session/prompt', { sessionId: conversation.agentSessionId ?? conversation.id, prompt: content, _meta: meta })
-    const assistant = reactiveAssistant()
-    if (assistant.status !== 'cancelled' && assistant.status !== 'failed' && !cancelRequested) {
-      assistant.status = 'completed'
-      assistant.process.completedAt = Date.now()
-      if (!assistant.finalText) appendTextSegment(assistant, t('taskComplete'))
-      speakReplyIfEnabled(assistant.finalText ?? '')
-      void autoJpMark(assistant)
+    
+    // ==========================================
+    // 增强的最终兜底逻辑
+    // ==========================================
+    
+    // 1. 强制从数组重新获取最新引用，避免拿到的对象跟视图绑定的不是同一个
+    const currentAssistant = reactiveAssistant()
+
+    // 2. 如果此时已经被用户点击了“停止”，或者因为错误被标为失败，则直接跳过完成逻辑
+    if (currentAssistant.status !== 'cancelled' && currentAssistant.status !== 'failed' && !cancelRequested) {
+      currentAssistant.status = 'completed'
+      currentAssistant.process.completedAt = Date.now()
+      
+      // 3. 详细检测最终文本是否为空
+      if (!currentAssistant.finalText || !currentAssistant.finalText.trim()) {
+        // 如果没有获取到任何正文内容，可能流式输出全部被丢弃了
+        console.error('[ACP] 流程结束 (end_turn)，但未收到任何文本内容。请检查 handleSessionUpdate 是否生效。')
+        
+        // 如果你想在这种情况下隐藏“任务已完成”几个字，直接注释掉下面这行：
+        appendTextSegment(currentAssistant, t('taskComplete'))
+      } else {
+        // 4. 只有在确实有文本内容时，才触发 TTS 朗读和日语注音逻辑
+        speakReplyIfEnabled(currentAssistant.finalText)
+        void autoJpMark(currentAssistant)
+      }
     }
+    
   } catch (error) {
-    // Only downgrade to failed while still pending/streaming; a completion
-    // path that already set 'completed' must not be overwritten by a late error.
-    const assistant = reactiveAssistant()
+    // 异常处理与自动重试逻辑
+    const currentAssistant = reactiveAssistant()
     const errMsg = error instanceof Error ? error.message : ''
     const connectionErrors = [t('connectionClosed'), t('connectionFailed'), t('connectionNotReady')]
-    // Cold-start / transient socket drop (first message right after startup):
-    // reconnect once and re-send instead of failing the user message. Only one
-    // retry so a genuinely broken backend surfaces quickly.
+    
     if (
-      !retry
-      && !cancelRequested
-      && assistant.status === 'pending'
-      && connectionErrors.includes(errMsg)
+      !retry &&
+      !cancelRequested &&
+      currentAssistant.status === 'pending' &&
+      connectionErrors.includes(errMsg)
     ) {
+      // 冷启动断连处理：断开旧连接，重试一次
       resetSocketForAgentChange()
       return sendAgentPrompt(conversation, text, resources, assistantMessage, isNewConversation, true, userMessage)
     }
-    if (assistant.status !== 'cancelled'
-      && assistant.status !== 'completed'
-      && assistant.status !== 'failed') {
-      assistant.status = 'failed'
-      assistant.process.completedAt = Date.now()
+    
+    if (
+      currentAssistant.status !== 'cancelled' &&
+      currentAssistant.status !== 'completed' &&
+      currentAssistant.status !== 'failed'
+    ) {
+      currentAssistant.status = 'failed'
+      currentAssistant.process.completedAt = Date.now()
+      
       const message = error instanceof Error ? error.message : t('taskFailed')
       errorText.value = message
-      // Show the raw error message as assistant content instead of only a status label
-      appendTextSegment(assistant, `\n\n${message}`)
+      
+      // 将错误信息追加到聊天记录中，避免用户只看到红色的 Error 却不知道发生了什么
+      appendTextSegment(currentAssistant, `\n\n[Error] ${message}`)
     }
   } finally {
     conversation.updatedAt = Date.now()
     void saveConversation(conversation)
     nextTick(scrollToBottom)
-    void refreshContextUsage() // auto-compaction may have just run on the backend
+    void refreshContextUsage()
   }
 }
 

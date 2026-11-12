@@ -467,6 +467,7 @@ def build_agent(
             # working. execute is unaffected (shell was never sandboxed).
             virtual_mode=False,
             inherit_env=True,
+            timeout=600,
         ),
         routes={
             "/memories/": ephemeral_backend,
