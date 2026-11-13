@@ -3,7 +3,7 @@
 Manages three resource types under the local `.deepagents/` directory:
   - skills/      skills (directory + SKILL.md, Anthropic Agent Skills format)
   - mcp_servers/ MCP server configs (directory + server.json, stdio launch spec)
-  - agents.json  agent definitions (single global file, object map { <name>: AgentDef })
+  - agents/       one `<name>.agent.md` file per Agent (YAML config + prompt body)
 
 The panel only reads/writes config files (CRUD / enable-disable); how acp_agent.py
 assembles model/skills/MCP tools from an agent is implemented by the caller,
@@ -12,7 +12,7 @@ this module does not touch assembly logic.
 Safety conventions:
   - name whitelist `^[a-z0-9][a-z0-9-]{0,63}$` prevents path traversal
   - deletes are limited to whitelisted .deepagents directories/keys
-  - agents.json writes: in-process write lock + same-dir .bak backup + atomic replace
+  - Agent document writes use a same-directory temporary file + atomic replace
 """
 
 import asyncio
@@ -24,8 +24,13 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 
+from utils.agent_registry import (
+    delete_agent as delete_agent_file,
+    load_agents_config,
+    write_agent,
+    write_agents_config,
+)
 from utils.mcp_loader import invalidate_agents_cache
 
 logger = logging.getLogger(__name__)
@@ -36,12 +41,11 @@ DE_ROOT = BASE_DIR / ".deepagents"
 SKILLS_DIR = DE_ROOT / "skills"
 MCP_DIR = DE_ROOT / "tools" / "mcp_servers"
 AGENTS_DIR = DE_ROOT / "agents"
-AGENTS_FILE = AGENTS_DIR / "agents.json"
 AGENT_MD_SUFFIX = ".agent.md"
 
 # allows underscores too (MCP server dirs like calc_server are common)
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-# Agent names are user-defined keys in agents.json and may be mixed-case
+# Agent IDs come from filenames and may be mixed-case
 # (e.g. "languageLearning"); they are matched case-sensitively.
 _AGENT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
@@ -81,8 +85,7 @@ def _ensure_name(name: str) -> str:
 
 
 def _ensure_agent(name: str) -> str:
-    """Trim + validate an agent name, preserving case (agents.json keys are
-    user-defined and may be mixed-case, e.g. languageLearning)."""
+    """Trim + validate an Agent ID, preserving filename case."""
     name = (name or "").strip()
     if not (name and _AGENT_NAME_RE.match(name)):
         raise HTTPException(status_code=400, detail=f"invalid agent name: {name!r} (use [A-Za-z0-9_-], max 64)")
@@ -111,14 +114,12 @@ def _write_json_atomic(path: Path, data) -> None:
 
 
 def _write_agents(data: dict) -> None:
-    _write_json_atomic(AGENTS_FILE, data)
-    # agents.json changed -> the assembly layer (skill_loader/mcp_loader) caches
-    # it per process; drop the cache so the next agent build picks up the change.
+    write_agents_config(data)
     invalidate_agents_cache()
 
 
 def _read_agents() -> dict:
-    return _read_json(AGENTS_FILE, {})
+    return load_agents_config()
 
 
 # ---------- built-in tools ----------
@@ -173,7 +174,7 @@ def _default_agent_tools() -> dict:
     inner_tools is ALWAYS an array (toggle is an array operation); the default
     is the full builtin tool name list. Legacy `null` values are migrated to
     the full list on read/normalize.
-    mcp_tools: list of manifest-style entries (server + serverInfo + selected tools[]).
+    mcp_tools: compact entries (server + selected tool name list).
     """
     return {"inner_tools": list(BUILTIN_TOOL_NAMES), "mcp_tools": []}
 
@@ -181,14 +182,14 @@ def _default_agent_tools() -> dict:
 def _norm_inner_tools(value) -> list[str]:
     """Normalize inner_tools: always a validated list of builtin tool names.
 
-    None / missing / empty legacy values are migrated to the full builtin set
-    (i.e. "all enabled" is expressed as the full array, not null).
+    None / missing values use the full builtin set. An explicit empty array
+    means no builtin tools are associated with the Agent.
     """
     if not isinstance(value, list):
         return list(BUILTIN_TOOL_NAMES)
     names = {v for v in value if isinstance(v, str) and v in BUILTIN_TOOL_NAMES}
     # keep the canonical builtin order, always an array
-    return [n for n in BUILTIN_TOOL_NAMES if n in names] if names else list(BUILTIN_TOOL_NAMES)
+    return [n for n in BUILTIN_TOOL_NAMES if n in names]
 
 
 def _norm_agent_tools(value) -> dict:
@@ -213,7 +214,7 @@ def _norm_agent_tools(value) -> dict:
 
 
 def _norm_mcp_tools(value) -> list[dict]:
-    """Normalize mcp_tools: manifest-style entries whose tools[] are selected."""
+    """Normalize MCP references to compact `{server, tools: name[]}` entries."""
     if not isinstance(value, list):
         return []
     out = []
@@ -227,67 +228,30 @@ def _norm_mcp_tools(value) -> list[dict]:
         tools = entry.get("tools")
         if not isinstance(tools, list):
             continue
-        sel = [t for t in tools if isinstance(t, dict) and t.get("name")]
+        sel = []
+        for tool in tools:
+            tool_name = tool if isinstance(tool, str) else tool.get("name") if isinstance(tool, dict) else None
+            if isinstance(tool_name, str) and tool_name and tool_name not in sel:
+                sel.append(tool_name)
         if not sel:
             continue
         seen.add(server)
-        out.append({
-            "server": server,
-            "serverInfo": entry.get("serverInfo"),
-            "tools": sel,
-        })
+        out.append({"server": server, "tools": sel})
     return out
 
 
 def _agent_mcp_entry(server: str, tools: list[dict]) -> dict:
-    """Build a manifest-style mcp_tools entry for a server."""
-    server_dir = MCP_DIR / server
-    manifest = _read_json(server_dir / "manifest.json", {})
-    return {
-        "serverInfo": manifest.get("serverInfo") or {"name": server, "version": ""},
-        "tools": tools,
-    }
-
-
-def _agent_md_front(name: str, data: dict) -> str:
-    """YAML front-matter (name + description) header of a `.agent.md` file."""
-    description = (data.get("description") or "").strip()
-    front = "---\nname: {0}\n".format(name)
-    if description:
-        front += "description: {0}\n".format(description)
-    return front + "---\n\n"
-
-
-def _agent_md_template(name: str, data: dict) -> str:
-    """Default .agent.md body for a new agent."""
-    return _agent_md_front(name, data) + "# {0}\n\nDefine the agent behavior here (system prompt / instructions).\n".format(name)
+    """Build a compact MCP reference entry for a server."""
+    names = [
+        tool if isinstance(tool, str) else tool.get("name")
+        for tool in tools
+        if isinstance(tool, str) or isinstance(tool, dict)
+    ]
+    return {"server": server, "tools": [name for name in names if name]}
 
 
 def _agent_md_path(name: str) -> Path:
     return AGENTS_DIR / (name + AGENT_MD_SUFFIX)
-
-
-def _migrate_legacy_agents() -> None:
-    """One-time migration: old `.deepagents/agents.json` -> `agents/*.agent.md` + `agents/agents.json`."""
-    legacy = DE_ROOT / "agents.json"
-    if not legacy.exists() or AGENTS_FILE.exists():
-        return
-    data = _read_json(legacy, {})
-    _write_json_atomic(AGENTS_FILE, data)
-    for name, defn in data.items():
-        md = _agent_md_path(name)
-        if not md.exists():
-            md.write_text(_agent_md_template(name, defn), encoding="utf-8")
-    try:
-        legacy.unlink()
-    except OSError:
-        pass
-
-
-_migrate_legacy_agents()
-
-if not AGENTS_FILE.exists():
-    _write_agents({})
 
 
 def _frontmatter(md: str) -> dict:
@@ -407,7 +371,7 @@ def _skill_names_on_disk() -> list[str]:
 
 
 def _agent_skills_config(agent: str) -> list[str] | None:
-    """The agent's skills array from agents.json (None = full installed set)."""
+    """The Agent's skills array (None = full installed set)."""
     agents = _read_agents()
     skills = (agents.get(agent) or {}).get("skills")
     return skills if isinstance(skills, list) else None
@@ -419,7 +383,7 @@ def list_skills(agent: str = "default"):
 
     null / missing skills mean the full installed set (default-agent behavior);
     an explicit array (including []) is the exact enabled set. Toggling only
-    touches agents.json — the global .disabled marker is no longer used.
+    updates the selected Agent document.
     """
     agent = _ensure_agent(agent)
     all_names = _skill_names_on_disk()
@@ -453,7 +417,7 @@ def toggle_skill(name: str, agent: str = "default"):
 
     null / missing skills mean the full installed set: toggling off starts
     from the full set and writes an explicit array; toggling back on re-adds
-    the name. Only the agent's skills field in agents.json is touched.
+    the     name. Only the selected Agent document is touched.
     """
     name = _ensure_name(name)
     agent = _ensure_agent(agent)
@@ -525,7 +489,7 @@ def delete_skill(name: str):
     return {"ok": True}
 
 
-# ---------- tools (MCP servers, per-agent enabled set in agents.json) ----------
+# ---------- tools (MCP servers, per-Agent references in .agent.md) ----------
 
 def _agent_tools_def(agent: str) -> dict:
     """Get (and lazily create) the AgentDef.tools structure of an agent."""
@@ -542,20 +506,8 @@ def _agent_tools_def(agent: str) -> dict:
 
 
 def _agent_mcp_entry(server: str, tool_names: list[str]) -> dict:
-    """Manifest-style mcp_tools entry for a server, tools[] filtered to selection.
-
-    `server` = directory name (the stable identity used for matching);
-    `serverInfo` keeps the manifest display info as-is.
-    """
-    server_dir = MCP_DIR / server
-    manifest = _read_json(server_dir / "manifest.json", {})
-    all_tools = manifest.get("tools") or []
-    sel = [t for t in all_tools if t.get("name") in set(tool_names)]
-    return {
-        "server": server,
-        "serverInfo": manifest.get("serverInfo") or {"name": server, "version": ""},
-        "tools": sel,
-    }
+    """Compact MCP reference entry for a server."""
+    return {"server": server, "tools": [name for name in tool_names if name]}
 
 
 def _mcp_entry_server(entry: dict) -> str:
@@ -578,7 +530,10 @@ def _server_entry(server_dir: Path, tools_def: dict) -> dict:
     server_info = manifest.get("serverInfo") or {}
     mcp_tools = tools_def.get("mcp_tools") or []
     entry = next((e for e in mcp_tools if _mcp_entry_server(e) == server_dir.name), None)
-    enabled_names = {t.get("name") for t in (entry or {}).get("tools") or []} if entry else set()
+    enabled_names = {
+        tool if isinstance(tool, str) else tool.get("name")
+        for tool in (entry or {}).get("tools") or []
+    } if entry else set()
     tools = []
     for t in manifest.get("tools") or []:
         tname = t.get("name", "")
@@ -607,7 +562,7 @@ def _server_entry(server_dir: Path, tools_def: dict) -> dict:
 def list_tools(agent: str = "default"):
     """MCP server groups for an agent: scan .deepagents/tools/mcp_servers/*/.
 
-    Enable state comes from the agent's tools.mcp_tools in agents.json.
+    Enable state comes from the Agent document's tools.mcp references.
     """
     agent = _ensure_agent(agent)
     tools_def, _ = _agent_tools_def(agent)
@@ -624,9 +579,8 @@ def list_tools(agent: str = "default"):
 def toggle_tool(name: str, agent: str = "default"):
     """Toggle an MCP server for one agent (group level).
 
-    Enabling adds a manifest-style entry (all tools selected) to the agent's
-    tools.mcp_tools; disabling removes the entry. Only the agent's tools
-    field in agents.json is touched.
+    Enabling adds a compact reference (all tools selected); disabling removes
+    it. Only the selected Agent document is touched.
     """
     name = _ensure_name(name)
     agent = _ensure_agent(agent)
@@ -668,7 +622,11 @@ def toggle_tool_item(server: str, tool: str, agent: str = "default"):
     mcp_tools = tools_def.get("mcp_tools") or []
     entry = next((e for e in mcp_tools if _mcp_entry_server(e) == server), None)
     if entry is not None:
-        sel = [t.get("name") for t in entry.get("tools") or []]
+        sel = [
+            item if isinstance(item, str) else item.get("name")
+            for item in entry.get("tools") or []
+        ]
+        sel = [name for name in sel if name]
         if tool in sel:
             sel = [x for x in sel if x != tool]
             enabled = False
@@ -676,7 +634,7 @@ def toggle_tool_item(server: str, tool: str, agent: str = "default"):
             sel.append(tool)
             enabled = True
         if sel:
-            entry["tools"] = [t for t in manifest.get("tools") or [] if t.get("name") in set(sel)]
+            entry["tools"] = [t.get("name") for t in manifest.get("tools") or [] if t.get("name") in set(sel)]
             tools_def["mcp_tools"] = [e if e is not entry else entry for e in mcp_tools]
         else:
             tools_def["mcp_tools"] = [e for e in mcp_tools if e is not entry]
@@ -743,7 +701,7 @@ async def _probe_mcp(cfg: dict) -> tuple[list[str], str | None]:
         )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
-                init = await session.initialize()
+                await session.initialize()
                 tools = await session.list_tools()
                 return [t.name for t in tools.tools], None
     except Exception as exc:  # noqa: BLE001
@@ -832,13 +790,13 @@ def delete_tool(name: str):
     return {"ok": True}
 
 
-# ---------- agents (agents/*.agent.md + agents/agents.json) ----------
+# ---------- agents (one agents/*.agent.md file per Agent) ----------
 
 def _remove_agent_ref(kind: str, name: str) -> None:
     """Remove a skill/tool reference from every agent (disable/delete cleanup).
 
     skills: drop the name from the enabled skills list.
-    tools:  drop the whole mcp_tools entry whose serverInfo.name == name.
+    tools:  drop the whole mcp_tools entry whose server matches name.
     Re-enabling does NOT re-add it (user picks it again).
     """
     agents = _read_agents()
@@ -861,23 +819,6 @@ def _remove_agent_ref(kind: str, name: str) -> None:
         _write_agents(agents)
 
 
-def _agent_md_body(name: str) -> str:
-    """Markdown body of a `.agent.md` file, i.e. everything after the YAML
-    front-matter (the part the edit form's "Task details" textarea edits)."""
-    md = _agent_md_path(name)
-    if not md.exists():
-        return ""
-    try:
-        text = md.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end != -1:
-            return text[end + 4:].lstrip("\n")
-    return text
-
-
 def _agent_entry(name: str, data: dict) -> dict:
     skills = data.get("skills")
     return {
@@ -893,24 +834,24 @@ def _agent_entry(name: str, data: dict) -> dict:
         "skills": skills if isinstance(skills, list) else _skill_names_on_disk(),
         "tools": _norm_agent_tools(data.get("tools")),
         "subagents": data.get("subagents") or [],
+        "knowledge": data.get("knowledge") or [],
         "file": name + AGENT_MD_SUFFIX,
-        "body": _agent_md_body(name),
+        "body": data.get("body") or "",
     }
 
 
 def _scan_agent_files() -> list[str]:
-    """Agent names = `agents/*.agent.md` files (merged with agents.json keys)."""
+    """Agent names come exclusively from `agents/*.agent.md` files."""
     names = set()
     if AGENTS_DIR.is_dir():
         for p in AGENTS_DIR.glob("*" + AGENT_MD_SUFFIX):
             names.add(p.name[: -len(AGENT_MD_SUFFIX)])
-    names.update(_read_agents().keys())
     return sorted(names)
 
 
 @router.get("/agents")
 def list_agents():
-    """Agent list: scan `agents/*.agent.md`, merge association data from `agents/agents.json`."""
+    """List Agent documents and their parsed frontmatter."""
     agents = _read_agents()
     items = [_agent_entry(name, agents.get(name) or {}) for name in _scan_agent_files()]
     items.sort(key=lambda x: (not x["enabled"], x["name"]))
@@ -932,9 +873,16 @@ async def _validate_agent(name: str, data: dict) -> dict:
     for skill in data.get("skills") or []:
         if not (SKILLS_DIR / skill / "SKILL.md").exists():
             problems.append(f"skill not found: {skill}")
-    for tool in data.get("tools") or []:
-        if not (MCP_DIR / tool / "server.json").exists():
-            problems.append(f"tool not found: {tool}")
+    for entry in (data.get("tools") or {}).get("mcp_tools") or []:
+        server = _mcp_entry_server(entry)
+        if not (MCP_DIR / server / "manifest.json").exists():
+            problems.append(f"tool server not found: {server}")
+            continue
+        available = {tool.get("name") for tool in _manifest_tools(MCP_DIR / server)}
+        for tool in entry.get("tools") or []:
+            tool_name = tool if isinstance(tool, str) else tool.get("name")
+            if tool_name not in available:
+                problems.append(f"tool not found: {server}/{tool_name}")
     return {"name": name, "ok": not problems, "problems": problems}
 
 
@@ -949,53 +897,42 @@ async def validate_agent(name: str):
 
 @router.post("/agents")
 async def create_agent(payload: dict):
-    """Create an agent: write `<name>.agent.md` + association entry in `agents/agents.json`."""
+    """Create one self-contained `<name>.agent.md` Agent document."""
     name = _ensure_agent(payload.get("name", ""))
     body = (payload.get("body") or "").strip()
     async with _agents_lock:
-        agents = _read_agents()
-        if _agent_md_path(name).exists() or name in agents:
+        if _agent_md_path(name).exists():
             raise HTTPException(status_code=409, detail=f"agent already exists: {name}")
         defn = _normalize_agent_def(payload)
-        agents[name] = defn
-        _write_agents(agents)
-        if not body:
-            body = _agent_md_template(name, defn)
-        else:
-            body = _agent_md_front(name, defn) + body
-        _agent_md_path(name).write_text(body, encoding="utf-8")
-    return _agent_entry(name, agents[name])
+        write_agent(name, defn, body or None)
+        invalidate_agents_cache()
+    return _agent_entry(name, _read_agents()[name])
 
 @router.put("/agents/{name}")
 async def update_agent(name: str, payload: dict):
-    """Edit an agent: overwrite `.agent.md` (if body given) and the agents.json entry."""
+    """Update an Agent document atomically."""
     name = _ensure_agent(name)
     async with _agents_lock:
         agents = _read_agents()
-        if not (_agent_md_path(name).exists() or name in agents):
+        if not _agent_md_path(name).exists():
             raise HTTPException(status_code=404, detail=f"agent not found: {name}")
         defn = _normalize_agent_def(payload, agents.get(name, {}).get("tools") or {})
-        agents[name] = defn
-        _write_agents(agents)
         body = (payload.get("body") or "").strip()
-        if body:
-            _agent_md_path(name).write_text(_agent_md_front(name, defn) + body, encoding="utf-8")
-        elif not _agent_md_path(name).exists():
-            _agent_md_path(name).write_text(_agent_md_template(name, defn), encoding="utf-8")
-    return _agent_entry(name, agents[name])
+        write_agent(name, defn, body or None)
+        invalidate_agents_cache()
+    return _agent_entry(name, _read_agents()[name])
 
 
 @router.delete("/agents/{name}")
 async def delete_agent(name: str):
-    """Delete an agent: remove `*.agent.md`, the agents.json key, and every
-    other agent's subagents reference to it. The `default` agent is protected."""
+    """Delete an Agent file and remove references from other Agent files."""
     name = _ensure_agent(name)
     if name == "default":
         raise HTTPException(status_code=409, detail="default agent cannot be deleted")
     async with _agents_lock:
         agents = _read_agents()
         md = _agent_md_path(name)
-        if not (md.exists() or name in agents):
+        if not md.exists():
             raise HTTPException(status_code=404, detail=f"agent not found: {name}")
         agents.pop(name, None)
         # clean up references: remove this agent from every other agent's subagents
@@ -1003,8 +940,8 @@ async def delete_agent(name: str):
             subs = agents[key].get("subagents") or []
             if name in subs:
                 agents[key]["subagents"] = [s for s in subs if s != name]
+        delete_agent_file(name)
         _write_agents(agents)
-        md.unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -1016,13 +953,12 @@ def _normalize_agent_def(payload: dict, existing_tools: dict | None = None) -> d
         "enabled": bool(payload.get("enabled", True)),
     }
     model = payload.get("model")
-    if isinstance(model, dict) and model:
+    if isinstance(model, str) and model.strip():
+        def_data["model"] = model.strip()
+    elif isinstance(model, dict) and model:
         allowed = {k: v for k, v in model.items() if k in ("provider", "model_name", "base_url", "api_key", "temperature", "max_tokens", "top_p")}
         if allowed:
             def_data["model"] = allowed
-    sp = payload.get("system_prompt")
-    if isinstance(sp, str) and sp.strip():
-        def_data["system_prompt"] = sp.strip()
     # skills: an explicit array (including []) is the exact enabled set;
     # omitting the field keeps null semantics (full installed set).
     if isinstance(payload.get("skills"), list):
@@ -1030,7 +966,7 @@ def _normalize_agent_def(payload: dict, existing_tools: dict | None = None) -> d
                   and not _is_disabled(SKILLS_DIR / s)]
         def_data["skills"] = skills
     # subagents: names of other agents this agent may recursively delegate to
-    # (must exist on disk / in agents.json and cannot reference itself)
+    # (must exist on disk and cannot reference itself)
     if isinstance(payload.get("subagents"), list):
         known = set(_scan_agent_files())
         # agent names may contain capitals (e.g. languageLearning); `known`
@@ -1039,11 +975,35 @@ def _normalize_agent_def(payload: dict, existing_tools: dict | None = None) -> d
                 and s != (payload.get("name") or "") and s in known]
         if subs:
             def_data["subagents"] = subs
+    if isinstance(payload.get("knowledge"), list):
+        knowledge = []
+        for item in payload["knowledge"]:
+            value = item.strip() if isinstance(item, str) else ""
+            if value and len(value) <= 256 and value not in knowledge:
+                knowledge.append(value)
+        def_data["knowledge"] = knowledge
     tools = _norm_agent_tools(payload.get("tools"))
     # the agent form sends a server-name list; keep the existing per-agent
     # inner_tools state instead of resetting it to "all enabled"
     if isinstance(payload.get("tools"), list) and existing_tools:
         tools["inner_tools"] = _norm_inner_tools(existing_tools.get("inner_tools"))
+    if def_data.get("knowledge"):
+        entries = tools.setdefault("mcp_tools", [])
+        knowledge_entry = next(
+            (entry for entry in entries if _mcp_entry_server(entry) == "knowledge_server"),
+            None,
+        )
+        if knowledge_entry is None:
+            entries.append(_agent_mcp_entry("knowledge_server", ["retrieve_knowledge"]))
+        else:
+            selected = [
+                item if isinstance(item, str) else item.get("name")
+                for item in knowledge_entry.get("tools") or []
+                if isinstance(item, str) or isinstance(item, dict)
+            ]
+            selected = [item for item in selected if isinstance(item, str) and item]
+            if "retrieve_knowledge" not in selected:
+                knowledge_entry["tools"] = selected + ["retrieve_knowledge"]
     # omit the field when it equals the default (full inner set, no MCP tools)
     if not (set(tools.get("inner_tools") or []) == set(BUILTIN_TOOL_NAMES) and not tools.get("mcp_tools")):
         def_data["tools"] = tools

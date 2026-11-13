@@ -2,9 +2,9 @@
  * Knowledge base API (MooFile Base integration).
  *
  * The gateway proxies database listing (/api/knowledge/databases) and
- * per-agent enable/disable (toggle writes `.deepagents/agents/agents.json`
- * `knowledge[]`). The management page itself is opened in a new window at
- * MOOFILE_BASE_URL (config.baseUrl).
+ * per-Agent associations stored in `.deepagents/agents/*.agent.md`
+ * `knowledge[]`. The management page itself is opened in an in-app modal
+ * backed by MOOFILE_BASE_URL (config.baseUrl).
  */
 
 export interface KnowledgeConfig {

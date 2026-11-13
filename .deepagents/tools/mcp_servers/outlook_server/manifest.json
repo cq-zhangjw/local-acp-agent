@@ -1,0 +1,156 @@
+{
+  "environment": {
+    "fastmcp": "4.1.3",
+    "mcp": "2.3.0"
+  },
+  "serverInfo": {
+    "name": "Outlook MCP Server",
+    "title": null,
+    "version": "4.1.3",
+    "description": null,
+    "websiteUrl": null,
+    "icons": null
+  },
+  "instructions": null,
+  "capabilities": {},
+  "tools": [
+    {
+      "name": "send_outlook_email",
+      "title": "Send Outlook Email",
+      "description": "Create an email in the local Outlook app and either show it for review or send it directly.",
+      "inputSchema": {
+        "properties": {
+          "to_recipients": {
+            "type": "string",
+            "description": "Recipient addresses, separated by semicolons."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Email body (HTML or plain text)."
+          },
+          "cc_recipients": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "CC addresses, separated by semicolons. Optional."
+          },
+          "bcc_recipients": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "BCC addresses, separated by semicolons. Optional."
+          },
+          "attachments": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Absolute file paths to attach. Optional."
+          },
+          "display_before_sending": {
+            "default": true,
+            "type": "boolean",
+            "description": "True (default) opens the draft window for the user to review and send manually;\nFalse sends immediately. Only use False when the user explicitly asks to send directly."
+          }
+        },
+        "required": [
+          "to_recipients",
+          "subject",
+          "body"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "download_latest_email_data",
+      "title": "Download Latest Email Data",
+      "description": "Export the latest emails of an Outlook folder (newest first) to a JSON file.",
+      "inputSchema": {
+        "properties": {
+          "folder_path": {
+            "type": "string",
+            "description": "Folder path under the mailbox root, separated by \"/\", e.g. \"Inbox\" or \"Inbox/Reports\".\nUse the folder names as shown in Outlook (they may be localized, e.g. \"受信トレイ\")."
+          },
+          "max_count": {
+            "default": 50,
+            "type": "integer",
+            "description": "Maximum number of emails to export. Defaults to 50."
+          }
+        },
+        "required": [
+          "folder_path"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    }
+  ],
+  "prompts": [],
+  "resources": [],
+  "resourceTemplates": []
+}

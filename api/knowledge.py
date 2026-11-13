@@ -5,12 +5,12 @@ Bridges the frontend knowledge panel to the external moofile_base project:
 - GET  /api/knowledge/databases?agent=<name>       -> list of knowledge bases (+ enabled)
 - POST /api/knowledge/start                        -> launch the external moofile_base backend
 - POST /api/knowledge/stop                         -> terminate the external moofile_base backend
-- POST /api/knowledge/databases/{db_id}/toggle?agent=<name> -> enable/disable the
-       knowledge_server MCP entry for the agent (single source of truth)
+- POST /api/knowledge/databases/{db_id}/toggle?agent=<name> -> associate or
+       disassociate one knowledge base with the agent
 
-The AI actually queries the knowledge base through the knowledge_server MCP
-tools (registered in agents.json under tools.mcp_tools), so the panel toggle
-here adds or removes that server entry - the same state the tools panel shows.
+The AI queries associated knowledge through the knowledge_server MCP tools.
+Knowledge-base IDs and MCP tool selections are stored independently; selecting
+a knowledge base guarantees that retrieve_knowledge is available.
 """
 import json
 import logging
@@ -22,13 +22,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from utils.agent_registry import load_agents_config, write_agents_config
 from utils.mcp_loader import clear_tools_cache, invalidate_agents_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # project root (api/ -> root)
-AGENTS_FILE = BASE_DIR / ".deepagents" / "agents" / "agents.json"
 KNOWLEDGE_SERVER = "knowledge_server"
 _DEFAULT_TIMEOUT = 2.0
 _CREATE_NO_WINDOW = 0x08000000  # Windows: do not pop a console for the child
@@ -78,26 +78,22 @@ def _get_json(path: str, base: str | None = None) -> object:
 
 
 def _read_agents() -> dict:
-    try:
-        with open(AGENTS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:  # noqa: BLE001 - missing/malformed config degrades to empty
-        return {}
+    return load_agents_config()
 
 
 def _write_agents(data: dict) -> None:
-    AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(AGENTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    write_agents_config(data)
+    invalidate_agents_cache()
 
 
-def _knowledge_enabled(agent: str) -> bool:
-    """True when the agent's mcp_tools contains the knowledge_server entry."""
+def _agent_knowledge_ids(agent: str) -> set[str]:
+    """Return the exact knowledge-base IDs associated with an agent."""
     cfg = _read_agents().get(agent) or {}
-    for entry in (cfg.get("tools") or {}).get("mcp_tools") or []:
-        if entry.get("server") == KNOWLEDGE_SERVER:
-            return True
-    return False
+    return {
+        item
+        for item in cfg.get("knowledge") or []
+        if isinstance(item, str) and item
+    }
 
 
 @router.get("/config")
@@ -130,7 +126,7 @@ def knowledge_databases(agent: str = "default"):
     except HTTPException:
         return []
     rows = envelope.get("data") if isinstance(envelope, dict) else envelope
-    enabled = _knowledge_enabled(agent or "default")
+    enabled_ids = _agent_knowledge_ids(agent or "default")
     out = []
     for db in rows or []:
         if db.get("type") != "vector":
@@ -142,7 +138,7 @@ def knowledge_databases(agent: str = "default"):
                 "type": db.get("type", "normal"),
                 "recordCount": db.get("recordCount", 0),
                 "documentCount": db.get("documentCount", 0),
-                "enabled": enabled,
+                "enabled": db.get("id") in enabled_ids,
             }
         )
     return out
@@ -259,24 +255,30 @@ def stop_knowledge_service():
 
 @router.post("/databases/{db_id}/toggle")
 def toggle_knowledge(db_id: str, agent: str = "default"):
-    """Enable/disable the knowledge_server MCP entry for the given agent.
-
-    db_id is accepted for API compatibility; enablement is per agent (the MCP
-    server covers all knowledge bases), keeping a single source of truth with
-    the tools panel.
-    """
+    """Associate one knowledge base and ensure its retrieval tool is available."""
+    db_id = db_id.strip()
+    if not db_id or len(db_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid knowledge database id")
     agent = agent or "default"
     if not _probe():
         raise HTTPException(status_code=503, detail="knowledge backend unreachable")
     agents = _read_agents()
     cfg = agents.setdefault(agent, {})
-    tools = cfg.setdefault("tools", {})
-    mcp_tools = tools.setdefault("mcp_tools", [])
-    exists = [e for e in mcp_tools if e.get("server") == KNOWLEDGE_SERVER]
-    if exists:
-        mcp_tools[:] = [e for e in mcp_tools if e.get("server") != KNOWLEDGE_SERVER]
+    knowledge = [
+        item for item in cfg.get("knowledge") or []
+        if isinstance(item, str) and item
+    ]
+    if db_id in knowledge:
+        cfg["knowledge"] = [item for item in knowledge if item != db_id]
         enabled = False
     else:
+        cfg["knowledge"] = knowledge + [db_id]
+        enabled = True
+
+    tools = cfg.setdefault("tools", {})
+    mcp_tools = tools.setdefault("mcp_tools", [])
+    entry = next((e for e in mcp_tools if e.get("server") == KNOWLEDGE_SERVER), None)
+    if enabled and entry is None:
         manifest_path = (
             BASE_DIR / ".deepagents" / "tools" / "mcp_servers" / KNOWLEDGE_SERVER / "manifest.json"
         )
@@ -285,14 +287,20 @@ def toggle_knowledge(db_id: str, agent: str = "default"):
                 manifest = json.load(f)
         else:
             manifest = {}
-        mcp_tools.append(
-            {
-                "server": KNOWLEDGE_SERVER,
-                "serverInfo": manifest.get("serverInfo"),
-                "tools": manifest.get("tools") or [],
-            }
-        )
-        enabled = True
+        available = {
+            tool.get("name")
+            for tool in manifest.get("tools") or []
+            if isinstance(tool, dict) and tool.get("name")
+        }
+        selected = ["retrieve_knowledge"] if "retrieve_knowledge" in available else []
+        mcp_tools.append({"server": KNOWLEDGE_SERVER, "tools": selected})
+    elif enabled and entry is not None:
+        selected = [
+            item if isinstance(item, str) else item.get("name")
+            for item in entry.get("tools") or []
+            if isinstance(item, str) or isinstance(item, dict)
+        ]
+        if "retrieve_knowledge" not in selected:
+            entry["tools"] = [item for item in selected if item] + ["retrieve_knowledge"]
     _write_agents(agents)
-    invalidate_agents_cache()
     return {"enabled": enabled}

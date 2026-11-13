@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { NModal, NButton, NInput, NSelect, NSwitch, NTag } from 'naive-ui'
+import { onMounted, ref } from 'vue'
+import { ArrowForwardOutline, CloseOutline, FlashOutline } from '@vicons/ionicons5'
+import { NButton, NIcon, NTag, NTooltip } from 'naive-ui'
+import { useI18n } from 'vue-i18n'
 
 interface QuickCommand {
   id: string
@@ -8,230 +10,93 @@ interface QuickCommand {
   content: string
   agent: string
   model: string
-  mode: string
+  mode?: string
   autoSend: boolean
-  type: string
+  role?: string
   webSearchOn?: boolean
   historyOn?: boolean
-  createdAt: number
+  jpMarkOn?: boolean
+  showOnHome?: boolean
 }
 
-const props = defineProps<{
-  agents: any[]
-  models: any[]
-  currentAgent: string
-  currentModel: string
-}>()
 const emit = defineEmits<{
   (e: 'invoke', cmd: QuickCommand): void
 }>()
+const { t } = useI18n()
 
 const list = ref<QuickCommand[]>([])
-const showModal = ref(false)
-const editing = ref<QuickCommand | null>(null)
-const form = ref({ title: '', content: '', agent: 'default', model: '', mode: 'task', autoSend: false, role: '', webSearchOn: true, historyOn: true, jpMarkOn: true })
-const roleOptions = ref<{ label: string; value: string }[]>([])
-
-async function loadRoles() {
-  try {
-    const r = await fetch('/api/roles')
-    const d = await r.json()
-    if (d.ok) roleOptions.value = d.items.map((r: any) => ({ label: r.name, value: r.name }))
-  } catch {}
-}
-
-// Task mode: can't pick the lightweight Chat agent. Chat mode: agent is Chat, model locked.
-const agentOptions = computed(() => {
-  const opts = props.agents.map(a => ({ label: a.name, value: a.name }))
-  if (form.value.mode === 'task') return opts.filter(o => o.value !== 'Chat')
-  return opts
-})
-const modelOptions = computed(() => [{ label: '默认', value: '' }, ...props.models.map(m => ({ label: m.model_name, value: m.model_name }))])
-
-function onModeChange(mode: string) {
-  if (mode === 'chat') {
-    form.value.agent = 'Chat'
-    form.value.model = ''
-  } else if (form.value.agent === 'Chat') {
-    form.value.agent = 'default'
-  }
-}
 
 async function load() {
-  try {
-    const r = await fetch('/api/quick-commands')
-    const d = await r.json()
-    if (d.ok) list.value = d.items
-  } catch {}
-}
-
-function openNew() {
-  editing.value = null
-  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true, jpMarkOn: true }
-  showModal.value = true
-}
-
-function openNewRole() {
-  // Not used in new architecture; kept for API compat.
-  editing.value = null
-  form.value = { title: '', content: '', agent: 'Chat', model: '', mode: 'chat', autoSend: false, role: '', webSearchOn: true, historyOn: true, jpMarkOn: true }
-  showModal.value = true
-}
-
-function openNewWithContent(text: string) {
-  editing.value = null
-  form.value = {
-    title: text.slice(0, 20),
-    content: text,
-    agent: props.currentAgent === 'Chat' ? 'Chat' : 'default',
-    model: '',
-    mode: props.currentAgent === 'Chat' ? 'chat' : 'task',
-    autoSend: false,
-    role: '',
-    webSearchOn: true,
-    historyOn: true,
-    jpMarkOn: true,
+  const response = await fetch('/api/quick-commands')
+  const data = await response.json()
+  if (response.ok && data.ok) {
+    list.value = (data.items || []).filter((command: QuickCommand) => command.showOnHome !== false)
   }
-  showModal.value = true
-}
-
-defineExpose({ openNew, openNewWithContent, openNewRole })
-
-function openEdit(cmd: QuickCommand) {
-  editing.value = cmd
-  form.value = { title: cmd.title, content: cmd.content, agent: cmd.agent, model: cmd.model, mode: cmd.mode, autoSend: cmd.autoSend, role: cmd.role || '', webSearchOn: cmd.webSearchOn !== false, historyOn: cmd.historyOn !== false, jpMarkOn: cmd.jpMarkOn !== false }
-  showModal.value = true
-}
-
-async function save() {
-  if (!form.value.title.trim()) return
-  const body = JSON.stringify(form.value)
-  if (editing.value) {
-    await fetch(`/api/quick-commands/${editing.value.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })
-  } else {
-    await fetch('/api/quick-commands', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
-  }
-  showModal.value = false
-  await load()
-}
-
-async function remove(cmd: QuickCommand, ev: Event) {
-  ev.stopPropagation()
-  if (!confirm(`删除快捷指令 "${cmd.title}"？`)) return
-  await fetch(`/api/quick-commands/${cmd.id}`, { method: 'DELETE' })
-  await load()
 }
 
 function invoke(cmd: QuickCommand) {
   emit('invoke', cmd)
 }
 
-onMounted(() => { load(); loadRoles() })
+async function removeFromHome(command: QuickCommand, event: Event) {
+  event.stopPropagation()
+  const response = await fetch(`/api/quick-commands/${encodeURIComponent(command.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...command, showOnHome: false }),
+  })
+  if (response.ok) await load()
+}
+
+defineExpose({ reload: load })
+onMounted(load)
 </script>
 
 <template>
-  <div class="qc-bar">
+  <div v-if="list.length" class="qc-bar">
+    <div class="qc-heading">
+      <NIcon :component="FlashOutline" />
+      <span>{{ t('quickCommands.homeTitle') }}</span>
+    </div>
     <div class="qc-scroll">
-      <div class="qc-card qc-new" @click="openNew">
-        <span class="qc-new-plus">＋</span>
-        <span class="qc-new-label">新建快捷指令</span>
-      </div>
-      <div v-for="cmd in list" :key="cmd.id" class="qc-card" @click="invoke(cmd)">
-        <div class="qc-head">
-          <span class="qc-title">{{ cmd.title }}</span>
-          <span class="qc-actions" @click.stop>
-            <button class="qc-btn" @click="openEdit(cmd)">✎</button>
-            <button class="qc-btn qc-btn-del" @click="remove(cmd, $event)">✕</button>
-          </span>
+      <div v-for="cmd in list" :key="cmd.id" class="qc-card" role="button" tabindex="0" @click="invoke(cmd)" @keydown.enter.prevent="invoke(cmd)">
+        <div class="qc-main">
+          <strong class="qc-title">{{ cmd.title }}</strong>
+          <span class="qc-preview">{{ cmd.content }}</span>
         </div>
-        <div class="qc-preview">{{ cmd.content }}</div>
-        <div class="qc-tags">
+        <div class="qc-meta">
           <NTag size="tiny" :bordered="false">{{ cmd.agent }}</NTag>
           <NTag v-if="cmd.model" size="tiny" :bordered="false" type="info">{{ cmd.model }}</NTag>
-          <NTag size="tiny" :bordered="false" :type="cmd.mode === 'chat' ? 'success' : 'warning'">{{ cmd.mode === 'chat' ? 'Chat' : 'Task' }}</NTag>
-          <NTag v-if="cmd.webSearchOn" size="tiny" :bordered="false" type="info">🌐</NTag>
-          <NTag v-if="cmd.historyOn" size="tiny" :bordered="false" type="info">📜</NTag>
-          <NTag v-if="cmd.jpMarkOn" size="tiny" :bordered="false" type="info">あ</NTag>
-          <NTag v-if="cmd.role" size="tiny" :bordered="false" type="warning">👤 {{ cmd.role }}</NTag>
         </div>
+        <NTooltip>
+          <template #trigger>
+            <NButton quaternary circle size="tiny" class="qc-remove" :aria-label="t('quickCommands.removeFromHome')" @click="removeFromHome(cmd, $event)">
+              <template #icon><NIcon :component="CloseOutline" /></template>
+            </NButton>
+          </template>
+          {{ t('quickCommands.removeFromHome') }}
+        </NTooltip>
+        <NIcon class="qc-run" :component="ArrowForwardOutline" />
       </div>
     </div>
-
-    <NModal v-model:show="showModal" preset="card" style="width:520px" :mask-closable="false" :title="editing ? '编辑快捷指令' : '新建快捷指令'">
-      <div class="qc-form">
-        <label>标题</label>
-        <NInput v-model:value="form.title" placeholder="如：分析项目结构" maxlength="30" show-count />
-        <label>模式</label>
-        <NSelect v-model:value="form.mode" :options="[{ label: 'Chat（轻量对话，锁默认模型）', value: 'chat' }, { label: 'Task（完整 Agent 工作区）', value: 'task' }]" @update:value="onModeChange" />
-        <label>关联角色预设</label>
-        <NSelect v-model:value="form.role" :options="[{ label: '不预设', value: '' }, ...roleOptions]" />
-        <label>预输入内容</label>
-        <NInput v-model:value="form.content" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" placeholder="输入框中会填入这段内容" />
-        <div class="qc-row">
-          <div class="qc-col">
-            <label>Agent</label>
-            <NSelect v-model:value="form.agent" :options="agentOptions" />
-          </div>
-          <div class="qc-col">
-            <label>模型{{ form.mode === 'chat' ? '（Chat 模式锁默认）' : '' }}</label>
-            <NSelect v-model:value="form.model" :options="modelOptions" :disabled="form.mode === 'chat'" />
-          </div>
-        </div>
-        <template v-if="form.mode === 'chat'">
-          <div class="qc-row">
-            <div class="qc-col qc-col-switch-inline">
-              <label>联网搜索</label>
-              <NSwitch v-model:value="form.webSearchOn" size="small" />
-            </div>
-            <div class="qc-col qc-col-switch-inline">
-              <label>历史上下文</label>
-              <NSwitch v-model:value="form.historyOn" size="small" />
-            </div>
-          </div>
-        </template>
-        <div class="qc-row">
-          <div class="qc-col qc-col-switch-inline">
-            <label>日语注音</label>
-            <NSwitch v-model:value="form.jpMarkOn" size="small" />
-          </div>
-          <div class="qc-col qc-col-switch-inline">
-            <label>自动发送</label>
-            <NSwitch v-model:value="form.autoSend" size="small" />
-          </div>
-        </div>
-        <div class="qc-actions-right">
-          <NButton @click="showModal = false">取消</NButton>
-          <NButton type="primary" @click="save">保存</NButton>
-        </div>
-      </div>
-    </NModal>
   </div>
 </template>
 
 <style scoped>
-.qc-bar { margin: 4px 0 8px; }
-.qc-scroll { display:flex; gap:10px; overflow-x:auto; padding-bottom:4px; }
+.qc-bar { margin:6px 0 10px; }
+.qc-heading { display:flex; align-items:center; gap:5px; margin-bottom:6px; color:var(--ui-text-muted); font-size:11px; font-weight:600; }
+.qc-scroll { display:flex; gap:8px; overflow-x:auto; padding:2px 1px 5px; }
 .qc-scroll::-webkit-scrollbar { height:4px; }
-.qc-scroll::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:2px; }
-.qc-card { flex:0 0 220px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; transition:all .15s; }
-.qc-card:hover { border-color:#2563eb; background:#eff6ff; }
-.qc-new { border:1.5px dashed #cbd5e1; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:90px; color:#94a3b8; }
-.qc-new-plus { font-size:22px; line-height:1; }
-.qc-new-label { font-size:12px; margin-top:4px; }
-.qc-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
-.qc-title { font-size:13px; font-weight:600; color:#1e293b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
-.qc-actions { display:none; gap:2px; }
-.qc-card:hover .qc-actions { display:flex; }
-.qc-btn { border:0; background:transparent; cursor:pointer; font-size:11px; color:#64748b; padding:0 2px; }
-.qc-btn-del:hover { color:#ef4444; }
-.qc-preview { font-size:12px; color:#64748b; line-height:1.5; height:36px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; margin-bottom:6px; }
-.qc-tags { display:flex; gap:4px; flex-wrap:wrap; }
-.qc-form label { display:block; font-size:12px; color:#64748b; margin:10px 0 4px; }
-.qc-row { display:flex; gap:12px; }
-.qc-col { flex:1; }
-.qc-col-switch { display:flex; align-items:center; gap:8px; }
-.qc-col-switch label { margin:0; flex:1; }
-.qc-col-switch-inline { display:flex; align-items:center; gap:6px; padding:5px 0; }
-.qc-col-switch-inline label { margin:0; }
-.qc-actions-right { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+.qc-scroll::-webkit-scrollbar-thumb { background:var(--ui-border-strong); border-radius:2px; }
+.qc-card { position:relative; display:grid; min-width:250px; max-width:320px; flex:0 0 auto; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:8px 12px; padding:9px 36px 9px 12px; border:1px solid var(--ui-border); border-radius:10px; background:var(--ui-surface); color:var(--ui-text); cursor:pointer; transition:border-color .15s ease, background .15s ease; }
+.qc-card:hover,.qc-card:focus-visible { border-color:var(--ui-primary); background:var(--ui-primary-soft); outline:none; }
+.qc-main { display:flex; min-width:0; flex-direction:column; gap:2px; }
+.qc-title,.qc-preview { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.qc-title { font-size:12px; }
+.qc-preview { color:var(--ui-text-muted); font-size:11px; }
+.qc-meta { display:flex; gap:4px; }
+.qc-remove { position:absolute; top:3px; right:3px; opacity:0; }
+.qc-card:hover .qc-remove,.qc-card:focus-within .qc-remove { opacity:1; }
+.qc-run { position:absolute; right:11px; bottom:10px; color:var(--ui-primary); font-size:14px; }
+@media (hover:none) { .qc-remove { opacity:1; } }
 </style>

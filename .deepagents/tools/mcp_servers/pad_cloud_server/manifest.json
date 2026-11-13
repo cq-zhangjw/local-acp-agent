@@ -1,0 +1,133 @@
+{
+  "environment": {
+    "fastmcp": "4.1.3",
+    "mcp": "2.3.0"
+  },
+  "serverInfo": {
+    "name": "Powerautomate cloud MCP Server",
+    "title": null,
+    "version": "4.1.3",
+    "description": null,
+    "websiteUrl": null,
+    "icons": null
+  },
+  "instructions": null,
+  "capabilities": {},
+  "tools": [
+    {
+      "name": "get_flow_list",
+      "title": "Get Flow List",
+      "description": "List Power Automate cloud flows in the default environment and save the raw result to a JSON file.\nThe first call may open Edge for interactive login.",
+      "inputSchema": {
+        "properties": {
+          "top": {
+            "default": 20,
+            "type": "integer",
+            "description": "Maximum number of flows to return. Defaults to 20."
+          }
+        },
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "delete_flow",
+      "title": "Delete Flow",
+      "description": "Permanently delete a Power Automate cloud flow. This cannot be undone:\nalways confirm the target flow with the user before calling.",
+      "inputSchema": {
+        "properties": {
+          "flow_id": {
+            "type": "string",
+            "description": "The flow id (GUID), as returned by get_flow_list."
+          }
+        },
+        "required": [
+          "flow_id"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    },
+    {
+      "name": "run_flow",
+      "title": "Run Flow",
+      "description": "Trigger a Power Automate cloud flow (flows with a manual/HTTP trigger).",
+      "inputSchema": {
+        "properties": {
+          "flow_id": {
+            "type": "string",
+            "description": "The flow id (GUID), as returned by get_flow_list."
+          }
+        },
+        "required": [
+          "flow_id"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "execution": null,
+      "outputSchema": {
+        "properties": {
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "type": "object",
+        "x-fastmcp-wrap-result": true
+      },
+      "icons": null,
+      "annotations": null,
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      }
+    }
+  ],
+  "prompts": [],
+  "resources": [],
+  "resourceTemplates": []
+}

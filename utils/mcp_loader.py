@@ -1,11 +1,10 @@
 """MCP tool loader for DeepAgents.
 
-Reads `.deepagents/agents/agents.json` (the per-agent tool configuration) and
-turns each enabled MCP tool into a langchain StructuredTool backed by a shared
-fastmcp stdio Client per server.
+Reads compact MCP references from `.deepagents/agents/*.agent.md` and resolves
+tool metadata from each server's manifest.json.
 
 Conventions:
-- Agent config path: <project>/.deepagents/agents/agents.json
+- Agent config path: <project>/.deepagents/agents/<name>.agent.md
 - MCP server home: <project>/.deepagents/tools/mcp_servers/<server>
 - A server directory must contain a manifest.json (tool metadata) and an entry
   file resolved in this order: <server>_mcp_server.py, server.py / main.py, a
@@ -18,9 +17,9 @@ Conventions:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,41 +28,30 @@ from fastmcp.client.transports.stdio import PythonStdioTransport
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, create_model
 
+from utils.agent_registry import (
+    invalidate_agents_cache as _invalidate_registry_cache,
+    load_agents_config as _load_agent_documents,
+)
+
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-AGENTS_FILE = BASE_DIR / ".deepagents" / "agents" / "agents.json"
 MCP_SERVERS_DIR = BASE_DIR / ".deepagents" / "tools" / "mcp_servers"
 
 _servers: dict[str, "ServerHolder"] = {}
 _tools_cache: dict[str, list[BaseTool]] = {}
-_agents_cache: dict[str, dict[str, Any]] | None = None
 _CALL_TIMEOUT_SECONDS = float(os.getenv("MCP_CALL_TIMEOUT", "60"))
 
 
 def load_agents_config() -> dict[str, dict[str, Any]]:
-    """Load agents.json once and cache it (agents change rarely at runtime)."""
-    global _agents_cache
-    if _agents_cache is not None:
-        return _agents_cache
-    try:
-        import json
-
-        with open(AGENTS_FILE, "r", encoding="utf-8") as f:
-            _agents_cache = json.load(f)
-    except Exception:  # noqa: BLE001 - missing/malformed config degrades to empty
-        _agents_cache = {}
-    return _agents_cache
+    """Compatibility wrapper around the single-file Agent registry."""
+    return _load_agent_documents()
 
 
 def invalidate_agents_cache() -> None:
-    """Drop the cached agents.json so the next load_agents_config() re-reads it.
-
-    Called by the management API after any agents.json write (skill/tool/agent
-    toggles), otherwise the assembly layer keeps assembling stale enablement.
-    """
-    global _agents_cache
-    _agents_cache = None
+    """Drop Agent document and assembled tool caches."""
+    _invalidate_registry_cache()
+    _tools_cache.clear()
 
 
 def clear_tools_cache() -> None:
@@ -339,7 +327,25 @@ def get_agent_mcp_tools(agent_name: str) -> list[BaseTool]:
             logger.warning("MCP server '%s' skipped: %s", server, exc)
             skipped = True
             continue
-        for tool_meta in entry.get("tools") or []:
+        manifest_path = MCP_SERVERS_DIR / server / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("MCP server '%s' manifest skipped: %s", server, exc)
+            skipped = True
+            continue
+        available = {
+            meta.get("name"): meta
+            for meta in manifest.get("tools") or []
+            if isinstance(meta, dict) and meta.get("name")
+        }
+        for selected in entry.get("tools") or []:
+            tool_name = selected if isinstance(selected, str) else selected.get("name")
+            tool_meta = available.get(tool_name)
+            if tool_meta is None:
+                logger.warning("MCP tool '%s/%s' not found in manifest", server, tool_name)
+                skipped = True
+                continue
             tools.append(make_tool(holder, tool_meta))
     if not skipped:
         _tools_cache[agent_name] = tools
@@ -347,9 +353,27 @@ def get_agent_mcp_tools(agent_name: str) -> list[BaseTool]:
 
 
 def get_agent_subagents_config(agent_name: str) -> list[dict[str, Any]]:
-    """Return subagent config entries for the given agent from agents.json."""
-    config = load_agents_config().get(agent_name) or {}
-    return config.get("subagents") or []
+    """Resolve subagent ID references to their Agent definitions."""
+    agents = load_agents_config()
+    config = agents.get(agent_name) or {}
+    resolved = []
+    for item in config.get("subagents") or []:
+        if isinstance(item, dict):
+            resolved.append(item)
+            continue
+        if not isinstance(item, str):
+            continue
+        target = agents.get(item)
+        if target is None:
+            logger.warning("subagent '%s' referenced by '%s' not found", item, agent_name)
+            continue
+        resolved.append({
+            "name": item,
+            "description": target.get("description", ""),
+            "skills": target.get("skills") or [],
+            "system_prompt": target.get("body") or target.get("system_prompt") or "",
+        })
+    return resolved
 
 
 async def close_mcp_clients() -> None:

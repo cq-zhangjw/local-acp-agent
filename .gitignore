@@ -75,3 +75,5 @@ rag-video/
 
 # 环境变量备份（含敏感 key，禁止提交）
 **/.env.*
+**/**/.current_system_prompt.txt
+/.deepagents/.current_system_prompt.txt

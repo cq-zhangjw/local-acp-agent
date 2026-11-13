@@ -47,6 +47,7 @@ class QuickCommandIn(BaseModel):
     webSearchOn: bool = True
     historyOn: bool = True
     jpMarkOn: bool = True
+    showOnHome: bool = True
 
 
 @router.get("/api/quick-commands")

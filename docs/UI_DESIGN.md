@@ -8,6 +8,9 @@
 | 核心原则 | 聊天主线按流式顺序交错呈现 AI 分析文本、执行计划面板与单个工具调用卡片：分析在前、工具调用紧随其后、最终回答收尾。过程信息不再整体收纳进单一折叠区。 |
 
 > 实现状态：本文反映当前 `web/src` 已实现行为。消息编辑、删除和服务端消息库为后续范围；当前会话展示状态保存在浏览器 localStorage，Agent checkpoint 由 SQLite 管理。
+>
+> 管理界面已迁移到统一“设置与管理中心”，右侧管理面板及输入框管理入口已移除，详见
+> [unified-management-center-plan.md](./unified-management-center-plan.md)。
 
 ## 1. 设计目标
 

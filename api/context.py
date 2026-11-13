@@ -29,6 +29,7 @@ import html as _html
 import json
 import logging
 import os
+from pathlib import Path
 
 import aiosqlite
 from fastapi import APIRouter
@@ -37,6 +38,7 @@ from langchain_core.messages import convert_to_messages
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 import acp_agent as _acp
+from utils.agent_registry import load_agents_config
 from utils.context_compactor import (
     CONTENT_SIZE,
     SUMMARY_PREFIX,
@@ -234,11 +236,10 @@ def _overhead_breakdown(agent_name: str, role_name: str = "") -> dict:
         sp_text = ""
     sp_tokens = round(estimate_text_tokens(sp_text))
 
-    # tools: inner_tools (built-in deepagents) + mcp_tools (from agents.json)
+    # tools: built-in references + MCP metadata resolved from manifests
     tool_rows = []
     try:
-        with open(".deepagents/agents/agents.json", "r", encoding="utf-8") as f:
-            cfg = json.load(f)
+        cfg = load_agents_config()
         agent_cfg = cfg.get(agent_name, {})
         tools_cfg = agent_cfg.get("tools", {})
         for t in tools_cfg.get("inner_tools", []) or []:
@@ -249,7 +250,25 @@ def _overhead_breakdown(agent_name: str, role_name: str = "") -> dict:
             })
         for mcp in tools_cfg.get("mcp_tools", []) or []:
             server = mcp.get("server", "?")
-            for t in mcp.get("tools", []) or []:
+            manifest_path = (
+                Path(__file__).resolve().parent.parent
+                / ".deepagents"
+                / "tools"
+                / "mcp_servers"
+                / server
+                / "manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            available = {
+                tool.get("name"): tool
+                for tool in manifest.get("tools") or []
+                if isinstance(tool, dict) and tool.get("name")
+            }
+            for selected in mcp.get("tools", []) or []:
+                tool_name = selected if isinstance(selected, str) else selected.get("name")
+                t = available.get(tool_name)
+                if t is None:
+                    continue
                 desc = t.get("description") or ""
                 schema = t.get("inputSchema") or {}
                 full = f"mcp_{server}_{t.get('name','?')}\n{desc}\n{json.dumps(schema, ensure_ascii=False)}"

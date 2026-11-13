@@ -3,9 +3,11 @@ import { computed, nextTick, onMounted, onUpdated, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
-import 'highlight.js/styles/github.css'
+import githubHighlightTheme from 'highlight.js/styles/github.css?inline'
+import githubDarkHighlightTheme from 'highlight.js/styles/github-dark.css?inline'
 import { useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { resolvedTheme } from '../theme'
 
 const props = defineProps<{ content: string; variant?: 'assistant' | 'user'; linkifyPaths?: boolean; html?: string }>()
 const emit = defineEmits<{ (e: 'open-file', path: string): void }>()
@@ -13,6 +15,19 @@ const root = ref<HTMLElement | null>(null)
 const message = useMessage()
 const { t } = useI18n()
 let mermaidSequence = 0
+const highlightThemeStyleId = 'acp-highlight-theme'
+
+function applyHighlightTheme() {
+  let style = document.getElementById(highlightThemeStyleId) as HTMLStyleElement | null
+  if (!style) {
+    style = document.createElement('style')
+    style.id = highlightThemeStyleId
+    document.head.appendChild(style)
+  }
+  style.textContent = resolvedTheme.value === 'dark'
+    ? githubDarkHighlightTheme
+    : githubHighlightTheme
+}
 
 const rootClass = computed(() => ({
   'markdown-message': true,
@@ -23,16 +38,15 @@ const rootClass = computed(() => ({
 let mermaidInstance: any | null = null
 async function getMermaid() {
   if (!mermaidInstance) {
-    const mermaid = (await import('mermaid')).default
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'default',
-      securityLevel: 'strict',
-      flowchart: { useMaxWidth: true, htmlLabels: false },
-      sequence: { useMaxWidth: true }
-    })
-    mermaidInstance = mermaid
+    mermaidInstance = (await import('mermaid')).default
   }
+  mermaidInstance.initialize({
+    startOnLoad: false,
+    theme: resolvedTheme.value === 'dark' ? 'dark' : 'default',
+    securityLevel: 'strict',
+    flowchart: { useMaxWidth: true, htmlLabels: false },
+    sequence: { useMaxWidth: true }
+  })
   return mermaidInstance
 }
 
@@ -205,12 +219,13 @@ async function replaceMermaid(pre: HTMLElement, source: string) {
   })
 
   try {
-    let svg = mermaidCache.get(source)
+    const cacheKey = `${resolvedTheme.value}:${source}`
+    let svg = mermaidCache.get(cacheKey)
     if (!svg) {
       const mermaid = await getMermaid()
       const { svg: rendered, bindFunctions } = await mermaid.render(`mermaid-${Date.now()}-${mermaidSequence++}`, source)
       svg = rendered
-      mermaidCache.set(source, svg)
+      mermaidCache.set(cacheKey, svg)
       bindFunctions?.(preview)
     }
     preview.innerHTML = svg
@@ -247,9 +262,34 @@ async function enhanceMarkdown() {
   }
 }
 
-onMounted(enhanceMarkdown)
+onMounted(() => {
+  applyHighlightTheme()
+  void enhanceMarkdown()
+})
 watch(safeHtml, enhanceMarkdown, { flush: 'post' })
 onUpdated(enhanceMarkdown)
+watch(resolvedTheme, async () => {
+  applyHighlightTheme()
+  mermaidCache.clear()
+  await nextTick()
+  const element = root.value
+  if (!element) return
+  for (const pre of element.querySelectorAll<HTMLElement>('pre')) {
+    pre.querySelector('.code-toolbar')?.remove()
+    const code = pre.querySelector<HTMLElement>('code')
+    if (code) delete code.dataset.enhanced
+  }
+  for (const block of element.querySelectorAll<HTMLElement>('.mermaid-block')) {
+    const source = block.querySelector('.mermaid-source code')?.textContent ?? ''
+    const pre = document.createElement('pre')
+    const code = document.createElement('code')
+    code.className = 'language-mermaid'
+    code.textContent = source
+    pre.appendChild(code)
+    block.replaceWith(pre)
+  }
+  await enhanceMarkdown()
+})
 </script>
 
 <template>
@@ -257,17 +297,17 @@ onUpdated(enhanceMarkdown)
 </template>
 
 <style scoped>
-.markdown-message { color: #1d2733; font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
-.markdown-message :deep(ruby rt) { user-select: none; font-size: .85em; color: #4a4e53; }
-.markdown-message :deep(img) { display: block; max-width: 100%; height: auto; margin: 12px 0; border-radius: 8px; border: 1px solid #e4e8ee; }
+.markdown-message { color: var(--ui-text); font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
+.markdown-message :deep(ruby rt) { user-select: none; font-size: .85em; color: var(--ui-text-muted); }
+.markdown-message :deep(img) { display: block; max-width: 100%; height: auto; margin: 12px 0; border-radius: 8px; border: 1px solid var(--ui-border); }
 .markdown-message :deep(p) { margin: 0 0 12px; } .markdown-message :deep(p:last-child) { margin-bottom: 0; }
 .markdown-message :deep(h1),.markdown-message :deep(h2),.markdown-message :deep(h3) { margin: 20px 0 10px; line-height: 1.35; } .markdown-message :deep(h1) { font-size: 20px; } .markdown-message :deep(h2) { font-size: 17px; } .markdown-message :deep(h3) { font-size: 15px; }
-.markdown-message :deep(ul),.markdown-message :deep(ol) { padding-left: 22px; margin: 8px 0 12px; } .markdown-message :deep(table) { display:block; max-width:100%; overflow:auto; border-collapse:collapse; margin:12px 0; } .markdown-message :deep(th),.markdown-message :deep(td) { padding:7px 10px; border:1px solid #e4e8ee; text-align:left; } .markdown-message :deep(th) { background:#f1f4f8; }
-.markdown-message :deep(pre) { position:relative; margin:12px 0; padding:38px 12px 12px; overflow:auto; background:#f1f4f8; border:1px solid #e4e8ee; border-radius:7px; } .markdown-message :deep(pre code) { padding:0; color:#1d2733; background:transparent; font-family:"Cascadia Code",Consolas,monospace; font-size:13px; line-height:1.55; }
-.markdown-message :deep(code:not(pre code)) { padding:2px 6px; color:#174cb9; background:#e9eef6; border:1px solid #dbe4f0; border-radius:5px; font-family:"Cascadia Code",Consolas,monospace; font-size:0.9em; }
-.markdown-message--user :deep(code:not(pre code)) { color:#1d4ed8; background:#fff; border-color:#b9c9e8; box-shadow:0 1px 2px rgba(29,39,51,.08); }
-.markdown-message :deep(a.file-reveal-link) { color:#2563eb; font-weight:600; text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:1.5px; cursor:pointer; word-break:break-all; }
-.markdown-message :deep(a.file-reveal-link:hover) { color:#1d4ed8; background:rgba(37,99,235,.07); border-radius:3px; }
-.markdown-message :deep(.code-toolbar) { position:absolute; top:0; right:0; left:0; display:flex; justify-content:space-between; align-items:center; height:30px; padding:0 9px; color:#6b7785; background:#e9edf2; border-bottom:1px solid #dce2ea; font:11px "Cascadia Code",Consolas,monospace; } .markdown-message :deep(.code-toolbar button) { padding:2px 7px; color:#405166; background:#fff; border:1px solid #d3dae4; border-radius:4px; cursor:pointer; font:inherit; }
-.markdown-message :deep(.mermaid-block) { margin:12px 0; overflow:hidden; background:#fff; border:1px solid #e4e8ee; border-radius:7px; } .markdown-message :deep(.mermaid-tabs) { display:flex; gap:2px; padding:6px 7px; background:#f1f4f8; border-bottom:1px solid #e4e8ee; } .markdown-message :deep(.mermaid-tabs button) { padding:4px 9px; color:#6b7785; background:transparent; border:0; border-radius:4px; cursor:pointer; font-size:12px; } .markdown-message :deep(.mermaid-tabs button.active) { color:#174cb9; background:#fff; box-shadow:0 1px 2px rgba(29,39,51,.08); } .markdown-message :deep(.mermaid-preview) { min-height:120px; padding:18px; overflow:auto; text-align:center; } .markdown-message :deep(.mermaid-preview svg) { max-width:100%; height:auto; } .markdown-message :deep(.mermaid-source) { position:relative; } .markdown-message :deep(.mermaid-source pre) { margin:0; border:0; border-radius:0; }
+.markdown-message :deep(ul),.markdown-message :deep(ol) { padding-left: 22px; margin: 8px 0 12px; } .markdown-message :deep(table) { display:block; max-width:100%; overflow:auto; border-collapse:collapse; margin:12px 0; } .markdown-message :deep(th),.markdown-message :deep(td) { padding:7px 10px; border:1px solid var(--ui-border); text-align:left; } .markdown-message :deep(th) { background:var(--ui-surface-muted); }
+.markdown-message :deep(pre) { position:relative; margin:12px 0; padding:38px 12px 12px; overflow:auto; background:var(--ui-surface-muted); border:1px solid var(--ui-border); border-radius:7px; } .markdown-message :deep(pre code) { padding:0; color:var(--ui-code-text); background:transparent; font-family:"Cascadia Code",Consolas,monospace; font-size:13px; line-height:1.55; }
+.markdown-message :deep(code:not(pre code)) { padding:2px 6px; color:var(--ui-code-keyword); background:var(--ui-surface-muted); border:1px solid var(--ui-border-strong); border-radius:5px; font-family:"Cascadia Code",Consolas,monospace; font-size:0.9em; }
+.markdown-message--user :deep(code:not(pre code)) { color:var(--ui-primary); background:var(--ui-surface); border-color:var(--ui-border-strong); }
+.markdown-message :deep(a.file-reveal-link) { color:var(--ui-primary); font-weight:600; text-decoration:underline; text-underline-offset:3px; text-decoration-thickness:1.5px; cursor:pointer; word-break:break-all; }
+.markdown-message :deep(a.file-reveal-link:hover) { color:var(--ui-primary-hover); background:var(--ui-primary-soft); border-radius:3px; }
+.markdown-message :deep(.code-toolbar) { position:absolute; top:0; right:0; left:0; display:flex; justify-content:space-between; align-items:center; height:30px; padding:0 9px; color:var(--ui-text-muted); background:var(--ui-surface-raised); border-bottom:1px solid var(--ui-border); font:11px "Cascadia Code",Consolas,monospace; } .markdown-message :deep(.code-toolbar button) { padding:2px 7px; color:var(--ui-text-secondary); background:var(--ui-surface); border:1px solid var(--ui-border-strong); border-radius:4px; cursor:pointer; font:inherit; }
+.markdown-message :deep(.mermaid-block) { margin:12px 0; overflow:hidden; background:var(--ui-surface); border:1px solid var(--ui-border); border-radius:7px; } .markdown-message :deep(.mermaid-tabs) { display:flex; gap:2px; padding:6px 7px; background:var(--ui-surface-muted); border-bottom:1px solid var(--ui-border); } .markdown-message :deep(.mermaid-tabs button) { padding:4px 9px; color:var(--ui-text-muted); background:transparent; border:0; border-radius:4px; cursor:pointer; font-size:12px; } .markdown-message :deep(.mermaid-tabs button.active) { color:var(--ui-code-keyword); background:var(--ui-surface); box-shadow:0 1px 2px rgba(0,0,0,.18); } .markdown-message :deep(.mermaid-preview) { min-height:120px; padding:18px; overflow:auto; text-align:center; } .markdown-message :deep(.mermaid-preview svg) { max-width:100%; height:auto; } .markdown-message :deep(.mermaid-source) { position:relative; } .markdown-message :deep(.mermaid-source pre) { margin:0; border:0; border-radius:0; }
 </style>

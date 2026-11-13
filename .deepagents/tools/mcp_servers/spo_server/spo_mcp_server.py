@@ -453,6 +453,52 @@ def update_list(
         return traceback.format_exc()
 
 
+@mcp.tool()
+def update_list_from_file(
+        site_url: str,
+        data_file: str,
+        list_id: str = None,
+        list_name: str = None
+):
+    """
+    Update a sharepoint list using rows read verbatim from a local JSON file.
+    Prefer this over `update_list` when the data comes from a file produced by another tool,
+    so the (possibly long) text is never retyped or summarized by the caller.
+    Args:
+        site_url: The URL of the SharePoint Online site.
+        data_file: Absolute path of a JSON file containing a list of dicts, each with an 'ID',
+                   e.g. [{"ID": 23, "ai_analyze_result": "...", "ai_final_answer": "..."}].
+        list_id (str, optional): The GUID of the SharePoint list. Mutually exclusive with `list_name`.
+        list_name (str, optional): The display name of the list. Mutually exclusive with `list_id`.
+
+    Returns:
+        str: Per-ID update result, or an error traceback.
+    """
+    try:
+        if list_id and list_name:
+            raise Exception("Error: Both 'list_id' and 'list_name' were provided. Please select only one!")
+        if not list_id and not list_name:
+            raise Exception("Error: Either 'list_id' or 'list_name' must be provided!")
+        if not data_file or not os.path.isfile(data_file):
+            raise Exception(f"Error: data_file not found: {data_file}")
+
+        with open(data_file, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, list) or not all(isinstance(r, dict) and "ID" in r for r in data):
+            raise Exception("Error: data_file must contain a JSON list of objects that each have an 'ID'.")
+
+        site = init_site(site_url=site_url)
+        sp_list = site.List(list_id if list_id else list_name)
+        result = sp_list.update_list_items(data=data, kind="Update", mutate_data=True)
+
+        failed = {k: v for k, v in result.items() if isinstance(v, tuple)}
+        if failed:
+            return f"Error: some rows failed to update: {failed}"
+        return f"Update list successfully! rows={len(data)}"
+    except:
+        return traceback.format_exc()
+
+
 if __name__ == '__main__':
     import sys
     sys.stdin = open(sys.stdin.fileno(), "r", encoding="utf-8", closefd=False)

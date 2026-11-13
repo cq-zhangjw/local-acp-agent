@@ -2,6 +2,48 @@
 	box-sizing: border-box;
 }
 
+:root {
+	--ui-canvas: #f7f8fa;
+	--ui-surface: #ffffff;
+	--ui-surface-raised: #ffffff;
+	--ui-surface-muted: #f1f4f8;
+	--ui-border: #e4e8ee;
+	--ui-border-strong: #cbd5e1;
+	--ui-text: #1d2733;
+	--ui-text-secondary: #405166;
+	--ui-text-muted: #6b7785;
+	--ui-primary: #2563eb;
+	--ui-primary-hover: #1d4ed8;
+	--ui-primary-soft: #eaf1ff;
+	--ui-success: #16805b;
+	--ui-warning: #b76a00;
+	--ui-error: #c73737;
+	--ui-code-text: #1d2733;
+	--ui-code-keyword: #174cb9;
+	--ui-overlay: rgba(255, 255, 255, .72);
+}
+
+:root[data-theme='dark'] {
+	--ui-canvas: #11151c;
+	--ui-surface: #1a202b;
+	--ui-surface-raised: #222a38;
+	--ui-surface-muted: #252e3d;
+	--ui-border: #354052;
+	--ui-border-strong: #4b5a70;
+	--ui-text: #e7edf5;
+	--ui-text-secondary: #c0cad8;
+	--ui-text-muted: #8e9bad;
+	--ui-primary: #76a7ff;
+	--ui-primary-hover: #9ac0ff;
+	--ui-primary-soft: #263957;
+	--ui-success: #62d39b;
+	--ui-warning: #f2bd61;
+	--ui-error: #ff8b8b;
+	--ui-code-text: #e7edf5;
+	--ui-code-keyword: #9ac0ff;
+	--ui-overlay: rgba(26, 32, 43, .86);
+}
+
 html,
 body,
 #app {
@@ -19,9 +61,10 @@ body {
 
 body {
 	overflow: hidden;
-	color: #1d2733;
-	background: #f7f8fa;
+	color: var(--ui-text);
+	background: var(--ui-canvas);
 	font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+	transition: color .15s ease, background-color .15s ease;
 }
 
 button,
@@ -33,5 +76,5 @@ textarea {
 /* Ruby annotation (furigana) styling: keep reading text readable and smaller */
 ruby rt {
   font-size: 14px;
-  color: #666;
+  color: var(--ui-text-muted);
 }

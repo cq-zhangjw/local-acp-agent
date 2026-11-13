@@ -60,7 +60,7 @@ function onUpdateShow(show: boolean) {
   height: 100%;
   border: 0;
   border-radius: 6px;
-  background: #fff;
+  background: var(--ui-surface);
   display: block;
 }
 

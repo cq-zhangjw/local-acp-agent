@@ -1,4 +1,4 @@
-"""Skills configured for an agent (agents.json -> AgentDef.skills).
+"""Skills configured in a single-file Agent definition.
 
 The skills array is the single source of enablement:
   - null / missing field = the full installed set (default-agent behavior);

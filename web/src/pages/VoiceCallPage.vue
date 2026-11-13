@@ -7,8 +7,10 @@ import {
 } from '@vicons/ionicons5'
 
 import { cleanSpeechText, getTtsConfig, playTtsStream, stopTtsStream } from '../api/ttsStream'
+import { initializeTheme } from '../theme'
 
 const { t } = useI18n()
+const stopThemeSync = initializeTheme()
 
 // ---------- 状态机 ----------
 type CallState = 'idle' | 'listening' | 'thinking' | 'speaking'
@@ -227,6 +229,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopThemeSync()
   clearSendTimer()
   stopListening()
   stopPlayback()
@@ -278,8 +281,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0f1115;
-  color: #e5e7eb;
+  background: var(--ui-canvas);
+  color: var(--ui-text);
   font-family: inherit;
 }
 
@@ -289,26 +292,26 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 14px;
-  background: #171a21;
-  border-bottom: 1px solid #262b36;
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-border);
 }
 .call-status {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #9ca3af;
+  color: var(--ui-text-muted);
   white-space: nowrap;
 }
 .status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6b7280;
+  background: var(--ui-text-muted);
 }
 .status-dot.active {
-  background: #22c55e;
-  box-shadow: 0 0 8px #22c55e;
+  background: var(--ui-success);
+  box-shadow: 0 0 8px var(--ui-success);
 }
 .top-actions {
   display: flex;
@@ -328,23 +331,23 @@ onUnmounted(() => {
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: #9ca3af;
+  color: var(--ui-text-muted);
   cursor: pointer;
   flex: 0 0 auto;
 }
 .icon-btn:hover {
-  background: #262b36;
-  color: #e5e7eb;
+  background: var(--ui-surface-muted);
+  color: var(--ui-text);
 }
 .icon-btn svg {
   width: 17px;
   height: 17px;
 }
 .icon-btn.hang-up {
-  color: #ef4444;
+  color: var(--ui-error);
 }
 .icon-btn.hang-up:hover {
-  background: rgba(239, 68, 68, 0.15);
+  background: color-mix(in srgb, var(--ui-error) 15%, transparent);
 }
 
 .center-area {
@@ -364,14 +367,14 @@ onUnmounted(() => {
   width: 88px;
   height: 88px;
   border-radius: 50%;
-  border: 2px solid #334155;
-  background: radial-gradient(circle at 35% 35%, #2b3a55, #1a2333);
-  color: #cbd5e1;
+  border: 2px solid var(--ui-border-strong);
+  background: radial-gradient(circle at 35% 35%, var(--ui-surface-muted), var(--ui-surface));
+  color: var(--ui-text-secondary);
   cursor: pointer;
 }
 .mic-btn.active {
-  border-color: #22c55e;
-  box-shadow: 0 0 24px rgba(34, 197, 94, 0.4);
+  border-color: var(--ui-success);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--ui-success) 40%, transparent);
 }
 .mic-btn svg {
   width: 34px;
@@ -379,28 +382,28 @@ onUnmounted(() => {
 }
 .state-text {
   font-size: 14px;
-  color: #9ca3af;
+  color: var(--ui-text-muted);
 }
 .live-text {
   max-width: 100%;
   padding: 8px 12px;
-  background: #1a2333;
+  background: var(--ui-surface-muted);
   border-radius: 8px;
   font-size: 13px;
-  color: #e5e7eb;
+  color: var(--ui-text);
   word-break: break-word;
 }
 .reply-text {
   max-width: 100%;
   padding: 8px 12px;
-  background: #1e293b;
+  background: var(--ui-primary-soft);
   border-radius: 8px;
   font-size: 13px;
-  color: #93c5fd;
+  color: var(--ui-primary-hover);
   word-break: break-word;
 }
 .no-bridge {
-  color: #f59e0b;
+  color: var(--ui-warning);
   font-size: 13px;
 }
 </style>

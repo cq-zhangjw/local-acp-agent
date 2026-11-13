@@ -34,6 +34,7 @@ from api.manage.manager import router as manage_router
 from api.timers import router as timers_router
 from api.quick_commands import router as quick_commands_router
 from api.roles import router as roles_router
+from api.statistics import router as statistics_router
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -336,6 +337,16 @@ async def _app_lifespan(app: FastAPI):
     # 'api' (default) leaves the external endpoint untouched.
     await _start_local_model()
 
+    try:
+        from utils.statistics_store import apply_retention, mark_running_interrupted
+
+        mark_running_interrupted()
+        apply_retention()
+    except Exception:  # noqa: BLE001 - statistics recovery must never break startup
+        logging.getLogger("gateway.statistics").exception(
+            "statistics startup recovery failed"
+        )
+
     # Recover tasks that were left in `running` by a previous process (D10),
     # then start the scheduler loop (skipped when TIMER_ENABLED=false).
     from api import timers_engine
@@ -400,23 +411,9 @@ app.include_router(reveal_router)
 app.include_router(timers_router)
 app.include_router(quick_commands_router)
 app.include_router(roles_router)
+app.include_router(statistics_router)
 
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
-
-
-@app.get("/api/local-image")
-async def local_image(path: str):
-    """Serve a local image file so the frontend can render it via markdown img.
-
-    Usage: ![desc](/api/local-image?path=C:/Users/xx/photo.png)
-    """
-    import mimetypes
-    from fastapi.responses import FileResponse
-    p = Path(path).expanduser()
-    if not p.is_file():
-        return JSONResponse({"error": "not found"}, status_code=404)
-    mime, _ = mimetypes.guess_type(str(p))
-    return FileResponse(str(p), media_type=mime or "image/png")
 
 
 @app.post("/upload")
@@ -442,8 +439,12 @@ async def acp_bridge(websocket: WebSocket):
     # The frontend selects an agent by name; it is forwarded through the WS query
     # string and injected as AGENT_NAME so acp_agent.py assembles the right tools.
     agent_name = websocket.query_params.get("agent", "default") or "default"
+    run_mode = (websocket.query_params.get("mode", "") or "").strip().lower()
+    if run_mode not in {"chat", "task"}:
+        run_mode = "chat" if agent_name == "Chat" else "task"
     agent_env = os.environ.copy()
     agent_env["AGENT_NAME"] = agent_name
+    agent_env["RUN_MODE"] = run_mode
     # The frontend also picks the model by name; it travels the same way
     # (WS query param -> MODEL_NAME env) so model_util.create_model resolves
     # the matching entry in model_config.json per subprocess.

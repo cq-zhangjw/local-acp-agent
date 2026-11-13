@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { cleanSpeechText, getTtsConfig, playTtsStream, stopTtsStream } from '../api/ttsStream'
 import {
@@ -11,7 +11,6 @@ import {
   ChevronBackOutline,
   ChevronDownOutline,
   ChevronForwardOutline,
-  CloseOutline,
   CodeSlashOutline,
   ConstructOutline,
   CopyOutline,
@@ -27,8 +26,8 @@ import {
   PaperPlaneOutline,
   RefreshOutline,
   SearchOutline,
+  SettingsOutline,
   SparklesOutline,
-  GitNetworkOutline,
   ReaderOutline,
   GlobeOutline,
   PersonCircleOutline,
@@ -38,13 +37,16 @@ import {
   TimeOutline,
   HelpCircleOutline,
   VolumeHighOutline,
-  VolumeMuteOutline
+  VolumeMuteOutline,
+  SunnyOutline,
+  MoonOutline
 } from '@vicons/ionicons5'
 import {
   NAlert,
   NAvatar,
   NButton,
   NCard,
+  NCheckbox,
   NDrawer,
   NDrawerContent,
   NDropdown,
@@ -62,23 +64,41 @@ import {
   NTabPane,
   NTooltip,
   NPopover,
-  NTransfer,
   NCollapse,
   NCollapseItem,
   useMessage
 } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import { storageKey, type SupportedLocale } from '../i18n'
+import { useTheme, type ThemePreference } from '../theme'
 import ExecutionProcess from '../components/ExecutionProcess.vue'
 import KnowledgeManageModal from '../components/KnowledgeManageModal.vue'
+import ManagementCenter from '../components/management/ManagementCenter.vue'
 import MarkdownMessage from '../components/MarkdownMessage.vue'
 import ToolCallCard from '../components/ToolCallCard.vue'
 import ThoughtCard from '../components/ThoughtCard.vue'
 import QuickCommandBar from '../components/QuickCommandBar.vue'
-import { fetchKnowledgeConfig, fetchKnowledgeDatabases, toggleKnowledgeDb, startKnowledgeService, stopKnowledgeService, type KnowledgeDb } from '../api/knowledge'
+import { fetchKnowledgeConfig, fetchKnowledgeDatabases, startKnowledgeService, stopKnowledgeService, type KnowledgeDb } from '../api/knowledge'
+
+const StatisticsModal = defineAsyncComponent(() => import('../components/StatisticsModal.vue'))
 
 type TaskStatus = 'pending' | 'streaming' | 'completed' | 'cancelled' | 'failed' | 'waiting_permission'
 type ToolStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting_permission'
+
+interface QuickCommand {
+  id: string
+  title: string
+  content: string
+  agent: string
+  model: string
+  mode?: string
+  autoSend: boolean
+  role?: string
+  webSearchOn?: boolean
+  historyOn?: boolean
+  jpMarkOn?: boolean
+  showOnHome?: boolean
+}
 
 interface AttachmentRef {
   path?: string
@@ -155,8 +175,10 @@ interface Conversation {
   updatedAt: number
   messages: ChatMessage[]
   todoId?: string
-  /** 'chat' = lightweight Chat agent (no tools/agents/skills UI); 'task' = full agent workspace. */
+  /** Legacy field retained when loading old history. Agent selection is authoritative. */
   mode?: 'chat' | 'task'
+  /** Agent selected for this conversation. */
+  agent?: string
   /** Model chosen for this conversation (name in model_config.json); passed to the backend via WS query param like agent. */
   model?: string
   /** Per-session chat toggles. */
@@ -187,6 +209,7 @@ interface PermissionRequest {
 const STORE_KEY = 'deepagents-acp-ui-sessions-v1'
 const message = useMessage()
 const { t, locale } = useI18n()
+const { preference: themePreference, resolved: resolvedTheme, setPreference: setThemePreference } = useTheme()
 const markdown = new MarkdownIt()
 const ws = ref<WebSocket | null>(null)
 const connected = ref(false)
@@ -204,17 +227,8 @@ const activeConversation = computed(() =>
   conversations.value.find((c) => c.id === activeConversationId.value)
 )
 
-/** True when the active conversation runs in lightweight Chat mode. */
-const isChatMode = computed(() => activeConversation.value?.mode === 'chat')
-/** 初始画面（无活动会话）：模式 tab 选择 Chat 聊天 / Agent 任务，工具栏随之联动。 */
 const noActiveConversation = computed(() => !activeConversationId.value)
-/** 初始画面模式偏好：localStorage 持久化，以最近一次选择/使用为准。 */
-const INITIAL_MODE_STORAGE_KEY = 'chat_initial_mode'
-const initialMode = ref<'chat' | 'task'>(localStorage.getItem(INITIAL_MODE_STORAGE_KEY) === 'chat' ? 'chat' : 'task')
-const toolbarChatMode = computed(() => noActiveConversation.value ? initialMode.value === 'chat' : isChatMode.value)
 const conversationSearch = ref('')
-// 侧栏分组折叠状态（普通会话 / Agent 会话 / 定时任务）
-const chatCollapsed = ref(false)
 const agentCollapsed = ref(false)
 const timerCollapsed = ref(false)
 const filteredConversations = computed(() => {
@@ -224,15 +238,12 @@ const filteredConversations = computed(() => {
     conversation.title.toLowerCase().includes(keyword)
   )
 })
-// 侧栏分组：定时任务专用会话（timer-*）、Chat 普通会话、Agent 任务会话
+// 侧栏分组：普通会话与定时任务会话。
 const timerConversations = computed(() =>
   filteredConversations.value.filter((c) => String(c.id).startsWith('timer-'))
 )
-const chatConversations = computed(() =>
-  filteredConversations.value.filter((c) => !String(c.id).startsWith('timer-') && c.mode === 'chat')
-)
-const agentConversations = computed(() =>
-  filteredConversations.value.filter((c) => !String(c.id).startsWith('timer-') && c.mode !== 'chat')
+const normalConversations = computed(() =>
+  filteredConversations.value.filter((c) => !String(c.id).startsWith('timer-'))
 )
 // todo 分步清单：key = conversation.id（由 ACP toolCalls 事件重放构建）
 const todoStates = ref<Record<string, TodoItem[]>>({})
@@ -262,6 +273,14 @@ const localeShort = computed(() =>
 function onLocaleSelect(key: string | number) {
   locale.value = key as SupportedLocale
 }
+const themeOptions = computed(() => [
+  { label: t('themeLight'), key: 'light', icon: () => h(NIcon, { component: SunnyOutline }) },
+  { label: t('themeDark'), key: 'dark', icon: () => h(NIcon, { component: MoonOutline }) },
+  { label: t('themeSystem'), key: 'system', icon: () => h(NIcon, { component: DesktopOutline }) },
+])
+function onThemeSelect(key: string | number) {
+  setThemePreference(key as ThemePreference)
+}
 const actionLabels = computed(() => ({
   retry: locale.value === 'zh' ? '重新生成' : locale.value === 'ja' ? '再生成' : 'Regenerate',
   copyText: locale.value === 'zh' ? '复制纯文本' : locale.value === 'ja' ? 'テキストをコピー' : 'Copy text',
@@ -276,6 +295,7 @@ const actionLabels = computed(() => ({
   selectVoice: locale.value === 'zh' ? '音色' : locale.value === 'ja' ? '音声' : 'Voice',
   speakReply: locale.value === 'zh' ? 'AI 回复完成后自动朗读' : locale.value === 'ja' ? 'AI応答を自動読み上げ' : 'Read AI replies aloud',
   openVoiceCall: locale.value === 'zh' ? '语音通话' : locale.value === 'ja' ? '音声通話' : 'Voice call',
+  theme: t('themeCurrent', { theme: t(`theme${themePreference.value.charAt(0).toUpperCase()}${themePreference.value.slice(1)}`) }),
   copied: locale.value === 'zh' ? '已复制' : locale.value === 'ja' ? 'コピーしました' : 'Copied',
   more: locale.value === 'zh' ? '更多操作' : locale.value === 'ja' ? 'その他の操作' : 'More actions',
   editMessage: locale.value === 'zh' ? '编辑消息' : locale.value === 'ja' ? 'メッセージを編集' : 'Edit message',
@@ -359,6 +379,7 @@ const actionLabels = computed(() => ({
   linkedSkills: locale.value === 'zh' ? '关联技能' : locale.value === 'ja' ? '連携スキル' : 'Linked skills',
   linkedSubagents: locale.value === 'zh' ? '关联子 Agent' : locale.value === 'ja' ? '連携サブエージェント' : 'Linked subagents',
   linkedTools: locale.value === 'zh' ? '关联工具' : locale.value === 'ja' ? '連携ツール' : 'Linked tools',
+  linkedKnowledge: locale.value === 'zh' ? '关联知识库' : locale.value === 'ja' ? '連携ナレッジベース' : 'Linked knowledge bases',
   currentAgent: locale.value === 'zh' ? '当前使用' : locale.value === 'ja' ? '現在使用中' : 'In use',
   subagents: locale.value === 'zh' ? '子 Agent' : locale.value === 'ja' ? 'サブエージェント' : 'Subagents',
   close: locale.value === 'zh' ? '关闭' : locale.value === 'ja' ? '閉じる' : 'Close',
@@ -582,36 +603,22 @@ function openNewConversation() {
   messageWindowSize.value = MESSAGE_WINDOW
   attachments.value = []
   errorText.value = ''
-  rightPanelVisible.value = false
+  managementVisible.value = false
   sidebarVisible.value = false
 }
 
-function createConversation(mode: 'chat' | 'task' = 'task') {
-  // Sidebar grouping: show the matching group, collapse the other.
-  chatCollapsed.value = mode !== 'chat'
-  agentCollapsed.value = mode === 'chat'
+function createConversation() {
+  agentCollapsed.value = false
   // NOTE: don't reset webSearch/history/jpMark — user may have toggled them
   // on the welcome page before sending; keep their current selection.
-  // Sidebar grouping: show the matching group, collapse the other.
-  chatCollapsed.value = mode !== 'chat'
-  agentCollapsed.value = mode === 'chat'
-  if (mode === 'chat') {
-    // Chat mode: agent is fixed to "Chat" (lightweight, no tools/skills).
-    if (currentAgentName.value !== 'Chat') {
-      currentAgentName.value = 'Chat'
-      localStorage.setItem(AGENT_STORAGE_KEY, 'Chat')
-      resetSocketForAgentChange()
-    }
-  } else {
-    resetAgentToDefault()
-  }
   // Pending draft attachments (e.g. an image attached on the start page) must
   // survive conversation creation: submitPrompt reads attachments.value AFTER
   // this call. selectConversation below clears the draft, so capture and
   // restore it in both branches.
   const pendingAttachments = [...attachments.value]
   const existingEmpty = conversations.value.find(
-    (conversation) => conversation.messages.length === 0 && (conversation.mode ?? 'task') === mode
+    (conversation) => conversation.messages.length === 0
+      && (conversation.agent ?? (conversation.mode === 'chat' ? 'Chat' : 'default')) === currentAgentName.value
   )
   if (existingEmpty) {
     selectConversation(existingEmpty.id)
@@ -626,7 +633,7 @@ function createConversation(mode: 'chat' | 'task' = 'task') {
     title: t('newSessionTitle'),
     updatedAt: Date.now(),
     messages: [],
-    mode,
+    agent: currentAgentName.value || 'default',
     model: currentModel.value || localStorage.getItem(MODEL_STORAGE_KEY) || undefined
   }
   conversations.value.unshift(conversation)
@@ -659,22 +666,11 @@ function sortedRuns(task: { runHistory?: any[] }): any[] {
 
 function selectConversation(id: string) {
   activeConversationId.value = id
-  // Session mode drives the ACP agent: chat conversations pin the Chat agent
-  // (lightweight, fixed, not switchable); task conversations keep the current
-  // agent choice, but leaving a Chat session back into a task session restores
-  // the default agent so the full workspace is available again.
   const modeConv = conversations.value.find((c) => c.id === id)
-  // 同步初始画面模式偏好：以最近一次进入的会话模式为准（定时任务除外）
-  if (modeConv?.mode && !String(id).startsWith('timer-')) initialMode.value = modeConv.mode
-  if (modeConv?.mode === 'chat') {
-    if (currentAgentName.value !== 'Chat') {
-      currentAgentName.value = 'Chat'
-      localStorage.setItem(AGENT_STORAGE_KEY, 'Chat')
-      resetSocketForAgentChange()
-    }
-  } else if (currentAgentName.value === 'Chat') {
-    currentAgentName.value = 'default'
-    localStorage.setItem(AGENT_STORAGE_KEY, 'default')
+  const conversationAgent = normalizeAgentName(modeConv?.agent ?? (modeConv?.mode === 'chat' ? 'Chat' : 'default'))
+  if (conversationAgent !== currentAgentName.value) {
+    currentAgentName.value = conversationAgent
+    localStorage.setItem(AGENT_STORAGE_KEY, conversationAgent)
     resetSocketForAgentChange()
   }
   // 模型按会话持久化：进入会话时恢复其模型（老会话无记录则保持当前选择）
@@ -683,7 +679,7 @@ function selectConversation(id: string) {
     currentModel.value = convModel
     resetSocketForAgentChange()
   }
-  // Restore per-session chat toggles
+  // Restore per-session conversation toggles.
   let needReconnect = false
   if (modeConv?.webSearchOn !== undefined && modeConv.webSearchOn !== webSearchOn.value) {
     webSearchOn.value = modeConv.webSearchOn
@@ -719,19 +715,14 @@ function selectConversation(id: string) {
   attachments.value = []
   sidebarVisible.value = false
   errorText.value = ''
-  // 切换会话时自动展开对应分组；进入具体定时任务会话时，右侧面板只保留该任务；
-  // 点击普通会话 / Agent 会话则关闭定时任务面板
+  // 切换会话时自动展开对应分组；进入定时任务会话时只保留该任务。
   if (String(id).startsWith('timer-')) {
     timerCollapsed.value = false
     timersScopeAll.value = false
-    rightPanelTab.value = 'timers'
-    rightPanelVisible.value = true
   } else {
-    const conv = conversations.value.find((c) => c.id === id)
-    if (conv?.mode === 'chat') chatCollapsed.value = false
-    else agentCollapsed.value = false
-    rightPanelVisible.value = false
+    agentCollapsed.value = false
   }
+  managementVisible.value = false
   // Keep the in-memory state of a running conversation local so history cannot
   // roll the stream back
   const local = conversations.value.find((conversation) => conversation.id === id)
@@ -910,14 +901,17 @@ async function restoreTodoState(conversation: Conversation) {
 }
 
 
-// ---------- 右上角菜单：导出会话 / 帮助 ----------
+// ---------- 右上角菜单：统计 / 导出会话 / 帮助 ----------
 const helpVisible = ref(false)
+const statisticsVisible = ref(false)
 const headerMoreOptions = computed(() => [
+  { label: t('statistics.title'), key: 'statistics' },
   { label: t('exportConversation'), key: 'export' },
   { label: t('help'), key: 'help' },
 ])
 function onHeaderMoreSelect(key: string) {
-  if (key === 'export') exportConversation()
+  if (key === 'statistics') statisticsVisible.value = true
+  else if (key === 'export') exportConversation()
   else if (key === 'help') helpVisible.value = true
 }
 
@@ -1166,27 +1160,41 @@ function switchModel(name: string) {
 }
 
 const sidebarCollapsed = ref(false)
-const rightPanelVisible = ref(false)
-const rightPanelTab = ref<'skills' | 'tools' | 'agents' | 'knowledge' | 'timers' | 'settings' | 'subagents'>('skills')
-const rightPanelTitle = computed(() =>
-  rightPanelTab.value === 'skills' ? actionLabels.value.skills
-    : rightPanelTab.value === 'tools' ? actionLabels.value.tools
-      : rightPanelTab.value === 'agents' ? actionLabels.value.agents
-        : rightPanelTab.value === 'knowledge' ? actionLabels.value.knowledge
-          : rightPanelTab.value === 'timers' ? t('timers.panelTitle')
-            : rightPanelTab.value === 'subagents' ? actionLabels.value.subagents
-              : actionLabels.value.settings
+type ManagementSection = 'timers' | 'agents' | 'skills' | 'tools' | 'knowledge' | 'roles' | 'commands'
+const managementVisible = ref(false)
+const managementSection = ref<ManagementSection>('agents')
+const managementTitle = computed(() =>
+  locale.value === 'zh' ? '设置与管理' : locale.value === 'ja' ? '設定と管理' : 'Settings & Management'
 )
-function openRightPanel(tab: 'skills' | 'tools' | 'agents' | 'knowledge' | 'timers' | 'settings' | 'subagents') {
-  rightPanelTab.value = tab
-  rightPanelVisible.value = true
+const managementMenuItems = computed(() => {
+  const automation = locale.value === 'zh' ? '自动化' : locale.value === 'ja' ? '自動化' : 'Automation'
+  const agent = 'Agent'
+  const application = locale.value === 'zh' ? '应用' : locale.value === 'ja' ? 'アプリ' : 'Application'
+  return [
+    { key: 'timers', label: t('timers.panelTitle'), group: automation, icon: TimeOutline },
+    { key: 'agents', label: actionLabels.value.agents, group: agent, icon: SparklesOutline },
+    { key: 'skills', label: actionLabels.value.skills, group: agent, icon: CodeSlashOutline },
+    { key: 'tools', label: actionLabels.value.tools, group: agent, icon: ConstructOutline },
+    { key: 'knowledge', label: actionLabels.value.knowledge, group: agent, icon: BookOutline },
+    { key: 'roles', label: t('rolePreset'), group: application, icon: PersonCircleOutline },
+    { key: 'commands', label: t('quickCommands.management'), group: application, icon: FlashOutline },
+  ]
+})
+function selectManagementSection(section: string) {
+  managementSection.value = section as ManagementSection
   panelQuery.value = ''
-  if (tab === 'timers') {
-    // 点击「定时任务」导航：切到新建会话（不选中）+ 显示所有定时器一览（不带执行记录）
-    activeConversationId.value = ''
-    timerCollapsed.value = false
+  if (section === 'timers') {
     timersScopeAll.value = true
+    void loadTimers()
+  } else if (section === 'roles') {
+    void refreshSystemCommands()
+  } else if (section === 'commands') {
+    void loadManagementQuickCommands()
   }
+}
+function openManagement(section: ManagementSection = managementSection.value) {
+  selectManagementSection(section)
+  managementVisible.value = true
 }
 
 // ---------- Manage panel (skills / tools / agents) ----------
@@ -1195,6 +1203,115 @@ const skillList = ref<any[]>([])
 const toolList = ref<any[]>([])
 const builtinTools = ref<any[]>([])
 const agentList = ref<any[]>([])
+const managementQuickCommands = ref<QuickCommand[]>([])
+const commandSearch = ref('')
+const commandModalVisible = ref(false)
+const editingCommandId = ref('')
+const commandForm = ref({
+  title: '',
+  content: '',
+  agent: 'Chat',
+  model: '',
+  autoSend: false,
+  role: '',
+  webSearchOn: true,
+  historyOn: true,
+  jpMarkOn: true,
+  showOnHome: true,
+})
+const filteredManagementQuickCommands = computed(() => {
+  const query = commandSearch.value.trim().toLowerCase()
+  if (!query) return managementQuickCommands.value
+  return managementQuickCommands.value.filter((command) =>
+    command.title.toLowerCase().includes(query)
+    || command.content.toLowerCase().includes(query)
+  )
+})
+const commandAgentOptions = computed(() =>
+  agentList.value.map((agent) => ({
+    label: displayAgentName(agent.name),
+    value: agent.name,
+  }))
+)
+const availableCommandModelOptions = computed(() =>
+  modelList.value.map((model) => ({ label: model.model_name, value: model.model_name }))
+)
+const commandModelOptions = computed(() => [
+  { label: t('quickCommands.defaultModel'), value: '' },
+  ...availableCommandModelOptions.value,
+])
+const commandRoleOptions = computed(() => [
+  { label: t('quickCommands.noRole'), value: '' },
+  ...systemCommands.value.map((role) => ({ label: role.name, value: role.name })),
+])
+
+async function loadManagementQuickCommands() {
+  try {
+    const data = await apiManage('/api/quick-commands')
+    managementQuickCommands.value = data.ok && Array.isArray(data.items) ? data.items : []
+  } catch (error: any) {
+    message.error(error.message)
+  }
+}
+
+function openCommandEdit(command?: QuickCommand) {
+  editingCommandId.value = command?.id ?? ''
+  commandForm.value = command
+    ? {
+        title: command.title,
+        content: command.content,
+        agent: command.agent,
+        model: command.model || '',
+        autoSend: command.autoSend,
+        role: command.role ?? '',
+        webSearchOn: command.webSearchOn !== false,
+        historyOn: command.historyOn !== false,
+        jpMarkOn: command.jpMarkOn !== false,
+        showOnHome: command.showOnHome !== false,
+      }
+    : {
+        title: '',
+        content: '',
+        agent: 'Chat',
+        model: availableCommandModelOptions.value[0]?.value ?? '',
+        autoSend: false,
+        role: '',
+        webSearchOn: true,
+        historyOn: true,
+        jpMarkOn: true,
+        showOnHome: true,
+      }
+  commandModalVisible.value = true
+}
+
+async function saveManagementQuickCommand() {
+  if (!commandForm.value.title.trim()) return
+  try {
+    const path = editingCommandId.value
+      ? `/api/quick-commands/${encodeURIComponent(editingCommandId.value)}`
+      : '/api/quick-commands'
+    await apiManage(path, editingCommandId.value ? 'PUT' : 'POST', {
+      ...commandForm.value,
+      mode: commandForm.value.agent === 'Chat' ? 'chat' : 'task',
+    })
+    commandModalVisible.value = false
+    await loadManagementQuickCommands()
+    await qcBar.value?.reload?.()
+  } catch (error: any) {
+    message.error(error.message)
+  }
+}
+
+async function deleteManagementQuickCommand(command: QuickCommand) {
+  if (!window.confirm(t('quickCommands.deleteConfirm', { title: command.title }))) return
+  try {
+    await apiManage(`/api/quick-commands/${encodeURIComponent(command.id)}`, 'DELETE')
+    await loadManagementQuickCommands()
+    await qcBar.value?.reload?.()
+  } catch (error: any) {
+    message.error(error.message)
+  }
+}
 
 /** Knowledge base (MooFile Base) state for the current agent. */
 const knowledgeList = ref<KnowledgeDb[]>([])
@@ -1224,20 +1341,6 @@ async function loadKnowledge() {
   } catch {
     knowledgeList.value = []
     knowledgeConfig.value = { ...knowledgeConfig.value, reachable: false }
-  }
-}
-
-async function toggleKnowledge(db: KnowledgeDb) {
-  if (!knowledgeConfig.value.reachable) {
-    message.warning(actionLabels.value.knowledgeUnreachable)
-    return
-  }
-  try {
-    const agent = currentAgentName.value || 'default'
-    await toggleKnowledgeDb(db.id, agent)
-    await loadKnowledge()
-  } catch (e: any) {
-    message.error(e.message || String(e))
   }
 }
 
@@ -1712,7 +1815,10 @@ const filteredToolList = computed(() => {
   })
 })
 const AGENT_STORAGE_KEY = 'currentAgentName'
-const currentAgentName = ref(localStorage.getItem(AGENT_STORAGE_KEY) || '')
+function normalizeAgentName(name: string) {
+  return name.trim().toLowerCase() === 'chat' ? 'Chat' : name
+}
+const currentAgentName = ref(normalizeAgentName(localStorage.getItem(AGENT_STORAGE_KEY) || ''))
 
 /** Display name: capitalize the first letter for the UI (storage keys stay untouched). */
 function displayAgentName(name: string) {
@@ -1734,19 +1840,9 @@ function resetSocketForAgentChange() {
 }
 
 /** New conversations always start on the default agent. */
-function resetAgentToDefault() {
-  currentAgentName.value = 'default'
-  localStorage.setItem(AGENT_STORAGE_KEY, 'default')
-  resetSocketForAgentChange()
-  void fetchManageData()
-}
-
 const agentDropdownOptions = computed(() =>
   agentList.value
     .filter((agent) => agent.enabled !== false)
-    // In task mode, the lightweight Chat agent must not be selectable —
-    // Chat mode conversations pin the Chat agent; task mode keeps the full workspace.
-    .filter((agent) => isChatMode.value || agent.name !== 'Chat')
     .map((agent) => ({
       key: agent.name,
       label: () =>
@@ -1757,57 +1853,6 @@ const agentDropdownOptions = computed(() =>
     }))
 )
 
-/** 当前 agent 的 subagents 是否包含指定 agent。 */
-function isSubagentOfCurrent(name: string): boolean {
-  const current = currentAgentName.value
-  if (!current) return false
-  const subs = agentList.value.find((a) => a.name === current)?.subagents || []
-  return subs.includes(name)
-}
-/** 保存当前 agent 的 subagents 列表（PUT 全字段，避免后端整体替换丢字段）。 */
-async function saveSubagents(subs: string[]) {
-  const current = currentAgentName.value
-  const a = agentList.value.find((x) => x.name === current)
-  if (!current || !a) return
-  await apiManage(`/api/manage/agents/${current}`, 'PUT', {
-    name: current,
-    description: a.description || '',
-    subagents: subs,
-    skills: a.skills || [],
-    tools: (a.tools?.mcp_tools || []).map((e: any) => e.server || e.serverInfo?.name).filter(Boolean)
-  })
-  await fetchManageData()
-}
-/** 子 Agent 面板删除：将 agent 移出当前 agent 的 subagents（不删除 agent 本身）。 */
-async function removeSubagent(agent: any) {
-  try {
-    const current = currentAgentName.value
-    const a = agentList.value.find((x) => x.name === current)
-    const next = (a?.subagents || []).filter((s) => s !== agent.name)
-    await saveSubagents(next)
-  } catch (e: any) {
-    message.error(e.message)
-  }
-}
-/** Sub-agent panel: list all enabled agents except the current one.
- *  Each row has a switch to toggle whether it's in the current agent's subagents.
- *  Built-in agents (default, Chat) are always off and disabled. */
-const subagentList = computed(() =>
-  agentList.value.filter((a) => a.enabled !== false && a.name !== currentAgentName.value)
-)
-
-const BUILTIN_AGENTS = ['default', 'Chat']
-function isBuiltinAgent(name: string) { return BUILTIN_AGENTS.includes(name) }
-
-async function toggleSubagent(agent: any, on: boolean) {
-  if (isBuiltinAgent(agent.name)) return
-  const current = agentList.value.find((a) => a.name === currentAgentName.value)
-  const subs = (current?.subagents || []) as string[]
-  const next = on ? [...new Set([...subs, agent.name])] : subs.filter((s) => s !== agent.name)
-  await saveSubagents(next)
-}
-/** 当前激活 Agent 的定义（子 Agent 面板顶部高亮卡片）。 */
-const currentAgentDef = computed(() => agentList.value.find((a) => a.name === currentAgentName.value))
 /** Delete an agent (md file + agents.json entry + references). default is protected. */
 async function deleteAgent(agent: any) {
   try {
@@ -1822,9 +1867,15 @@ async function deleteAgent(agent: any) {
   }
 }
 function selectAgent(key: string) {
-  if (toolbarChatMode.value) return // Chat mode: agent is fixed and not switchable
-  currentAgentName.value = key
-  localStorage.setItem(AGENT_STORAGE_KEY, key)
+  const agentName = normalizeAgentName(key)
+  currentAgentName.value = agentName
+  localStorage.setItem(AGENT_STORAGE_KEY, agentName)
+  const conversation = currentConversation.value
+  if (conversation) {
+    conversation.agent = agentName
+    conversation.updatedAt = Date.now()
+    void saveConversation(conversation)
+  }
   fetchManageData() // tools panel state follows the current agent
   resetSocketForAgentChange() // each agent maps to a separate ACP subprocess
 }
@@ -1841,9 +1892,9 @@ async function fetchManageData() {
     agentList.value = Array.isArray(agents) ? agents : []
     builtinTools.value = Array.isArray(builtins) ? builtins : []
     // fall back to the first available agent when the stored one is gone
-    if (!agentList.value.some((a) => a.name === currentAgentName.value)) {
+    if (currentAgentName.value !== 'Chat' && !agentList.value.some((a) => a.name === currentAgentName.value)) {
       const first = agentList.value.find((a) => a.enabled !== false)
-      currentAgentName.value = first?.name || ''
+      currentAgentName.value = normalizeAgentName(first?.name || '')
     }
     // tool enablement is queried per agent (agents.json tools.mcp_tools)
     const toolsAgent = currentAgentName.value || 'default'
@@ -1866,57 +1917,12 @@ async function apiManage(path: string, method = 'GET', body?: unknown) {
   return data
 }
 
-async function toggleSkill(name: string) {
-  try {
-    await apiManage(`/api/manage/skills/${name}/toggle?agent=${encodeURIComponent(currentAgentName.value || 'default')}`, 'POST')
-    await fetchManageData()
-  } catch (e: any) {
-    message.error(e.message)
-  }
-}
-async function toggleTool(name: string) {
-  try {
-    await apiManage(`/api/manage/tools/${name}/toggle?agent=${currentAgentName.value || 'default'}`, 'POST')
-    await fetchManageData()
-  } catch (e: any) {
-    message.error(e.message)
-  }
-}
 /** Expand/collapse an MCP server group in the tools panel */
 const expandedToolGroups = ref<string[]>([])
 function toggleToolGroup(name: string) {
   const idx = expandedToolGroups.value.indexOf(name)
   if (idx >= 0) expandedToolGroups.value.splice(idx, 1)
   else expandedToolGroups.value.push(name)
-}
-/** Toggle a single MCP tool (add/remove in the current agent's mcp_tools) */
-async function toggleToolItem(server: string, tool: string) {
-  try {
-    await apiManage(`/api/manage/tools/${server}/${tool}/toggle?agent=${currentAgentName.value || 'default'}`, 'POST')
-    await fetchManageData()
-  } catch (e: any) {
-    message.error(e.message)
-  }
-}
-/** Current agent's tool config (inner_tools + mcp_tools) */
-const currentAgentTools = computed(() =>
-  agentList.value.find((a) => a.name === currentAgentName.value)?.tools
-)
-/** Whether a built-in tool is enabled: inner_tools is an array containing it (default full array = all enabled) */
-function innerToolEnabled(name: string): boolean {
-  const inner = currentAgentTools.value?.inner_tools
-  if (!Array.isArray(inner)) return true // fallback: legacy/null data means all enabled
-  return inner.includes(name)
-}
-/** Clicking a built-in tool chip toggles the current agent's inner_tools */
-async function toggleInnerTool(name: string) {
-  if (!currentAgentName.value) return
-  try {
-    await apiManage(`/api/manage/agents/${currentAgentName.value}/inner-tools/${name}/toggle`, 'POST')
-    await fetchManageData()
-  } catch (e: any) {
-    message.error(e.message)
-  }
 }
 // file preview modal (clickable absolute-path links in messages)
 const filePreviewVisible = ref(false)
@@ -1973,10 +1979,36 @@ function openSkillEdit(item?: any) {
   skillModalVisible.value = true
 }
 
+async function deleteSkill(skill: any) {
+  if (!window.confirm(actionLabels.value.confirmDelete)) return
+  try {
+    await apiManage(`/api/manage/skills/${encodeURIComponent(skill.name)}`, 'DELETE')
+    await fetchManageData()
+  } catch (e: any) {
+    message.error(e.message)
+  }
+}
+
 // new tool modal
 const toolModalVisible = ref(false)
 const toolEditing = ref(false)
 const toolForm = ref({ name: '', description: '', command: '', args: '', cwd: '', env: '' })
+function openToolEdit(item?: any) {
+  toolEditing.value = !!item
+  toolForm.value = item
+    ? {
+        name: item.name,
+        description: item.description || '',
+        command: item.command || '',
+        args: Array.isArray(item.args) ? item.args.join('\n') : '',
+        cwd: item.cwd || '',
+        env: item.env && typeof item.env === 'object'
+          ? Object.entries(item.env).map(([key, value]) => `${key}=${value}`).join('\n')
+          : '',
+      }
+    : { name: '', description: '', command: '', args: '', cwd: '', env: '' }
+  toolModalVisible.value = true
+}
 async function submitTool() {
   try {
     const payload = {
@@ -2009,19 +2041,147 @@ async function submitTool() {
 // new agent modal
 const agentModalVisible = ref(false)
 const agentEditing = ref(false)
-const agentForm = ref({ name: '', description: '', body: '', subagents: [] as string[], skills: [] as string[], tools: [] as string[] })
+interface AgentToolConfig {
+  inner_tools: string[]
+  mcp_tools: Array<{ server: string; tools: string[] }>
+}
+interface AgentForm {
+  name: string
+  description: string
+  body: string
+  subagents: string[]
+  skills: string[]
+  tools: AgentToolConfig
+  knowledge: string[]
+}
+const emptyAgentForm = (): AgentForm => ({
+  name: '',
+  description: '',
+  body: '',
+  subagents: [],
+  skills: [],
+  tools: { inner_tools: [], mcp_tools: [] },
+  knowledge: [],
+})
+const agentForm = ref<AgentForm>(emptyAgentForm())
+const agentKnowledgeOptions = ref<KnowledgeDb[]>([])
+const expandedAgentToolNodes = ref<string[]>(['mcp_server'])
 const agentSkillOptions = computed(() =>
-  skillList.value.filter((s) => s.enabled).map((s) => ({ label: s.name, value: s.name }))
+  skillList.value.map((s) => ({ label: s.name, value: s.name }))
 )
-const agentToolOptions = computed(() =>
-  toolList.value.map((t) => ({ label: t.name, value: t.name }))
-)
+const agentKnowledgeChoices = computed(() => {
+  const rows = [...agentKnowledgeOptions.value]
+  for (const id of agentForm.value.knowledge) {
+    if (!rows.some((item) => item.id === id)) {
+      rows.push({
+        id,
+        name: id,
+        type: 'vector',
+        recordCount: 0,
+        documentCount: 0,
+        enabled: true,
+      })
+    }
+  }
+  return rows
+})
+function agentSkillNames(agent: any): string[] {
+  return Array.isArray(agent.skills) ? agent.skills : []
+}
+function agentToolNames(agent: any): string[] {
+  if (Array.isArray(agent.tools)) return agent.tools
+  const innerTools = Array.isArray(agent.tools?.inner_tools) ? agent.tools.inner_tools : []
+  const mcpTools = Array.isArray(agent.tools?.mcp_tools)
+    ? agent.tools.mcp_tools.flatMap((server: any) =>
+        (server.tools || []).map((tool: string) => `${server.server}/${tool}`)
+      )
+    : []
+  return [...innerTools, ...mcpTools]
+}
 /** Sub-agent options: other enabled agents (exclude the one being edited). */
 const agentSubagentOptions = computed(() =>
   agentList.value
     .filter((a) => a.enabled !== false && a.name !== agentForm.value.name)
     .map((a) => ({ label: displayAgentName(a.name), value: a.name }))
 )
+function setStringSelection(values: string[], value: string, checked: boolean): string[] {
+  return checked
+    ? [...new Set([...values, value])]
+    : values.filter((item) => item !== value)
+}
+function setAgentSubagent(value: string, checked: boolean) {
+  agentForm.value.subagents = setStringSelection(agentForm.value.subagents, value, checked)
+}
+function setAgentSkill(value: string, checked: boolean) {
+  agentForm.value.skills = setStringSelection(agentForm.value.skills, value, checked)
+}
+function setAgentKnowledge(value: string, checked: boolean) {
+  agentForm.value.knowledge = setStringSelection(agentForm.value.knowledge, value, checked)
+}
+function setAgentBuiltinTool(value: string, checked: boolean) {
+  agentForm.value.tools.inner_tools = setStringSelection(
+    agentForm.value.tools.inner_tools,
+    value,
+    checked
+  )
+}
+function isAgentBuiltinGroupChecked(): boolean {
+  return builtinTools.value.length > 0
+    && builtinTools.value.every((tool) => agentForm.value.tools.inner_tools.includes(tool.name))
+}
+function isAgentBuiltinGroupIndeterminate(): boolean {
+  const selectedCount = agentForm.value.tools.inner_tools.length
+  return selectedCount > 0 && !isAgentBuiltinGroupChecked()
+}
+function setAgentBuiltinGroup(checked: boolean) {
+  agentForm.value.tools.inner_tools = checked
+    ? builtinTools.value.map((tool) => tool.name)
+    : []
+}
+function isAgentToolNodeExpanded(key: string): boolean {
+  return expandedAgentToolNodes.value.includes(key)
+}
+function toggleAgentToolNode(key: string) {
+  expandedAgentToolNodes.value = isAgentToolNodeExpanded(key)
+    ? expandedAgentToolNodes.value.filter((item) => item !== key)
+    : [...expandedAgentToolNodes.value, key]
+}
+function selectedAgentMcpTools(server: string): string[] {
+  return agentForm.value.tools.mcp_tools.find((entry) => entry.server === server)?.tools || []
+}
+function setAgentMcpTools(server: string, selected: string[]) {
+  const entries = agentForm.value.tools.mcp_tools.filter((entry) => entry.server !== server)
+  if (selected.length) entries.push({ server, tools: [...new Set(selected)] })
+  agentForm.value.tools.mcp_tools = entries
+}
+function setAgentMcpTool(server: string, tool: string, checked: boolean) {
+  setAgentMcpTools(
+    server,
+    setStringSelection(selectedAgentMcpTools(server), tool, checked)
+  )
+}
+function setAgentMcpServer(server: any, checked: boolean) {
+  const names = (server.tools || [])
+    .map((tool: any) => tool.name)
+    .filter((name: unknown): name is string => typeof name === 'string' && !!name)
+  setAgentMcpTools(server.name, checked ? names : [])
+}
+function isAgentMcpServerChecked(server: any): boolean {
+  const available = (server.tools || []).map((tool: any) => tool.name).filter(Boolean)
+  const selected = selectedAgentMcpTools(server.name)
+  return available.length > 0 && available.every((name: string) => selected.includes(name))
+}
+function isAgentMcpServerIndeterminate(server: any): boolean {
+  const selectedCount = selectedAgentMcpTools(server.name).length
+  return selectedCount > 0 && !isAgentMcpServerChecked(server)
+}
+async function loadAgentKnowledgeOptions(agentName: string) {
+  try {
+    agentKnowledgeOptions.value = await fetchKnowledgeDatabases(agentName || 'default')
+  } catch {
+    agentKnowledgeOptions.value = [...knowledgeList.value]
+  }
+}
 async function submitAgent() {
   try {
     if (agentEditing.value) {
@@ -2031,7 +2191,7 @@ async function submitAgent() {
     }
     agentModalVisible.value = false
     agentEditing.value = false
-    agentForm.value = { name: '', description: '', body: '', subagents: [], skills: [], tools: [] }
+    agentForm.value = emptyAgentForm()
     await fetchManageData()
   } catch (e: any) {
     message.error(e.message)
@@ -2039,6 +2199,7 @@ async function submitAgent() {
 }
 function openAgentEdit(item?: any) {
   agentEditing.value = !!item
+  expandedAgentToolNodes.value = ['mcp_server']
   agentForm.value = item
     ? {
         name: item.name,
@@ -2046,10 +2207,25 @@ function openAgentEdit(item?: any) {
         body: item.body || '',
         subagents: item.subagents || [],
         skills: item.skills || [],
-        // tools new structure: extract the linked MCP server directory names
-        tools: (item.tools?.mcp_tools || []).map((e: any) => e.server || e.serverInfo?.name).filter(Boolean)
+        tools: {
+          inner_tools: [...(item.tools?.inner_tools || [])],
+          mcp_tools: (item.tools?.mcp_tools || []).map((entry: any) => ({
+            server: entry.server || entry.serverInfo?.name,
+            tools: (entry.tools || [])
+              .map((tool: any) => typeof tool === 'string' ? tool : tool.name)
+              .filter(Boolean),
+          })).filter((entry: any) => entry.server),
+        },
+        knowledge: [...(item.knowledge || [])],
       }
-    : { name: '', description: '', body: '', subagents: [], skills: [], tools: [] }
+    : {
+        ...emptyAgentForm(),
+        tools: {
+          inner_tools: builtinTools.value.map((tool) => tool.name),
+          mcp_tools: [],
+        },
+      }
+  void loadAgentKnowledgeOptions(item?.name || currentAgentName.value || 'default')
   agentModalVisible.value = true
 }
 
@@ -2216,9 +2392,10 @@ function websocketUrl() {
   const agent = currentAgentName.value || 'default'
   const model = currentModel.value || ''
   const modelParam = model ? `&model=${encodeURIComponent(model)}` : ''
-  const wsParam = (webSearchOn.value && agent === 'Chat') ? '&web_search=1' : ''
+  const wsParam = webSearchOn.value ? '&web_search=1' : ''
   const roleParam = systemOverrideName.value ? `&role=${encodeURIComponent(systemOverrideName.value)}` : ''
-  return `${protocol}//${window.location.host}/acp-ws?agent=${encodeURIComponent(agent)}${modelParam}${wsParam}${roleParam}`
+  const mode = agent === 'Chat' ? 'chat' : 'task'
+  return `${protocol}//${window.location.host}/acp-ws?agent=${encodeURIComponent(agent)}&mode=${mode}${modelParam}${wsParam}${roleParam}`
 }
 
 function connect() {
@@ -2679,7 +2856,11 @@ async function sendAgentPrompt(
     content.push(...imageBlocks)
     
     // 发送请求
-    const meta: Record<string, unknown> = { history_on: historyOn.value }
+    const meta: Record<string, unknown> = {
+      history_on: historyOn.value,
+      conversation_id: conversation.id,
+      question: text,
+    }
     if (retry) meta.retry = true
     
     await callAcp('session/prompt', { sessionId: conversation.agentSessionId ?? conversation.id, prompt: content, _meta: meta })
@@ -2749,11 +2930,8 @@ async function sendAgentPrompt(
   }
 }
 
-/** Quick command card clicked: switch agent/model/mode, then fill input (or auto-send). */
+/** Apply a quick command to the unified workspace. */
 async function onQuickCommand(cmd: any) {
-  if (cmd.mode && cmd.mode !== toolbarChatMode.value && !activeConversationId.value) {
-    setInitialMode(cmd.mode)
-  }
   if (cmd.agent && cmd.agent !== currentAgentName.value) selectAgent(cmd.agent)
   if (cmd.model && cmd.model !== currentModel.value) {
     currentModel.value = cmd.model
@@ -2770,33 +2948,27 @@ async function onQuickCommand(cmd: any) {
     }
   }
   input.value = cmd.content
-  if (cmd.mode === 'chat') {
-    let needReconnect = false
-    if (cmd.webSearchOn !== undefined && cmd.webSearchOn !== webSearchOn.value) {
-      webSearchOn.value = cmd.webSearchOn
-      localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(cmd.webSearchOn))
-      needReconnect = true
-    }
-    if (cmd.historyOn !== undefined && cmd.historyOn !== historyOn.value) {
-      historyOn.value = cmd.historyOn
-      localStorage.setItem(HISTORY_STORAGE_KEY, String(cmd.historyOn))
-    }
-    if (cmd.jpMarkOn !== undefined && cmd.jpMarkOn !== jpMarkOn.value) {
-      jpMarkOn.value = cmd.jpMarkOn
-      localStorage.setItem(JP_MARK_STORAGE_KEY, String(cmd.jpMarkOn))
-    }
-    if (needReconnect) resetSocketForAgentChange()
+  let needReconnect = false
+  if (cmd.webSearchOn !== undefined && cmd.webSearchOn !== webSearchOn.value) {
+    webSearchOn.value = cmd.webSearchOn
+    localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(cmd.webSearchOn))
+    needReconnect = true
   }
+  if (cmd.historyOn !== undefined && cmd.historyOn !== historyOn.value) {
+    historyOn.value = cmd.historyOn
+    localStorage.setItem(HISTORY_STORAGE_KEY, String(cmd.historyOn))
+  }
+  if (cmd.jpMarkOn !== undefined && cmd.jpMarkOn !== jpMarkOn.value) {
+    jpMarkOn.value = cmd.jpMarkOn
+    localStorage.setItem(JP_MARK_STORAGE_KEY, String(cmd.jpMarkOn))
+  }
+  if (needReconnect) resetSocketForAgentChange()
   input.value = cmd.content
   if (cmd.autoSend) await submitPrompt()
   nextTick(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus())
 }
 
 const qcBar = ref<any>(null)
-function addQuickCommandFromMessage(item: any) {
-  openMenuId.value = ''
-  qcBar.value?.openNewWithContent(item.text)
-}
 
 function focusComposer() {
   nextTick(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus())
@@ -2807,7 +2979,7 @@ function chooseRole(cmd: any) {
   systemOverrideName.value = cmd.name
   showRolePresets.value = false
   resetSocketForAgentChange()
-  message.success(`已启用角色：${cmd.name}`)
+  message.success(t('roleEnabled', { name: cmd.name }))
 }
 function clearRole() {
   systemOverride.value = ''
@@ -2845,7 +3017,7 @@ async function saveRole() {
   })
   showRoleEditor.value = false
   refreshSystemCommands()
-  message.success(`角色 ${name} 已保存`)
+  message.success(t('roleSaved', { name }))
 }
 
 async function deleteRole(name: string) {
@@ -2856,8 +3028,7 @@ async function deleteRole(name: string) {
 async function submitPrompt() {
   const text = input.value.trim()
   if ((!text && !attachments.value.length && !screenShareActive.value) || isRunning.value || isUploading.value) return
-  // 初始画面（无活动会话）：发送消息时按当前选择的模式新建会话
-  if (!currentConversation.value) createConversation(initialMode.value)
+  if (!currentConversation.value) createConversation()
   const conversation = currentConversation.value
   if (!conversation) return
   // capture the screen as an attachment before sending when share-screen is on
@@ -3625,24 +3796,6 @@ function onComposerArrow(event: KeyboardEvent, delta: number) {
 }
 
 watch(locale, (value) => localStorage.setItem(storageKey, value as SupportedLocale))
-watch(initialMode, (mode) => localStorage.setItem(INITIAL_MODE_STORAGE_KEY, mode))
-
-/** 主页（无会话）模式下同步 agent：Agent 任务 → default，Chat 聊天 → Chat。 */
-function applyHomeAgentForMode(mode: 'chat' | 'task') {
-  const target = mode === 'chat' ? 'Chat' : 'default'
-  if (currentAgentName.value !== target) {
-    currentAgentName.value = target
-    localStorage.setItem(AGENT_STORAGE_KEY, target)
-    resetSocketForAgentChange()
-  }
-}
-
-/** 主页模式 tab 切换：更新模式偏好并同步对应 agent。 */
-function setInitialMode(mode: 'chat' | 'task') {
-  initialMode.value = mode
-  if (noActiveConversation.value) applyHomeAgentForMode(mode)
-}
-
 // 定时任务会话自动刷新：进入 timer-* 会话时每 5s 静默更新履历（不滚动、不重置窗口），切换会话立即停止
 /** 静默刷新会话数据：只替换内存数据，不重置消息窗口、不滚动（避免画面跳动）。 */
 async function refreshTimerSessionQuiet(id: string) {
@@ -3681,18 +3834,23 @@ function startTimerPolling(id: string) {
 }
 watch(activeConversationId, (id) => {
   stopTimerPolling()
-  if (id && String(id).startsWith('timer-') && rightPanelVisible.value) {
+  if (
+    id
+    && String(id).startsWith('timer-')
+    && managementVisible.value
+    && managementSection.value === 'timers'
+  ) {
     startTimerPolling(id)
   }
 })
-// 面板关闭时停止轮询；重新打开且当前为定时任务会话时恢复
-watch(rightPanelVisible, (visible) => {
+// 管理中心关闭时停止轮询；重新打开定时任务模块时恢复
+watch(managementVisible, (visible) => {
   if (!visible) {
     stopTimerPolling()
     return
   }
   const id = activeConversationId.value
-  if (id && String(id).startsWith('timer-')) {
+  if (managementSection.value === 'timers' && id && String(id).startsWith('timer-')) {
     startTimerPolling(id)
   }
 })
@@ -3703,10 +3861,6 @@ onMounted(async () => {
   void loadTimers()
   try {
     await loadHistory()
-    // 主页（无会话）按当前模式同步默认 agent：任务→default，聊天→Chat
-    // （在 warmUpAcp 之前，确保预热连接使用正确的 agent）
-    if (noActiveConversation.value) applyHomeAgentForMode(initialMode.value)
-    // 不再自动新建会话：初始画面展示会话模式选择，发送消息时按所选模式创建
     void validateStoredSessions()
   } finally {
     initialLoading.value = false
@@ -3758,12 +3912,6 @@ onBeforeUnmount(() => {
         <button type="button" class="sidebar-nav-item sidebar-nav-item--primary" :aria-label="t('newConversation')" @click="openNewConversation">
           <NIcon :component="AddOutline" /><span>{{ t('newConversation') }}</span>
         </button>
-        <button type="button" class="sidebar-nav-item" :class="{ 'sidebar-nav-item--active': rightPanelVisible && rightPanelTab === 'timers' }" :aria-label="t('timers.panelTitle')" @click="openRightPanel('timers')">
-          <NIcon :component="TimeOutline" /><span>{{ t('timers.panelTitle') }}</span>
-        </button>
-        <button type="button" class="sidebar-nav-item" :class="{ 'sidebar-nav-item--active': rightPanelVisible && rightPanelTab === 'agents' }" :aria-label="actionLabels.agents" @click="openRightPanel('agents')">
-          <NIcon :component="SparklesOutline" /><span>{{ actionLabels.agents }}</span>
-        </button>
       </div>
 
       <div class="conversation-search">
@@ -3776,13 +3924,13 @@ onBeforeUnmount(() => {
         <div class="conversation-group conversation-group--normal" :class="{ 'conversation-group--collapsed': agentCollapsed }">
           <button type="button" class="conversation-group-label" :class="{ 'conversation-group-label--collapsed': agentCollapsed }" @click="agentCollapsed = !agentCollapsed">
             <NIcon :component="agentCollapsed ? ChevronForwardOutline : ChevronDownOutline" />
-            <span>{{ t('timers.timerGroupAgent') }}</span>
-            <span class="conversation-group-count">{{ agentConversations.length }}</span>
+            <span>{{ t('recentConversations') }}</span>
+            <span class="conversation-group-count">{{ normalConversations.length }}</span>
           </button>
           <div v-if="!agentCollapsed" class="conversation-group-list">
-            <div v-if="!agentConversations.length && !conversationSearch.trim()" class="conversation-group-empty">{{ t('timers.timerGroupAgentEmpty') }}</div>
+            <div v-if="!normalConversations.length && !conversationSearch.trim()" class="conversation-group-empty">{{ t('emptyConversations') }}</div>
             <button
-              v-for="conversation in agentConversations"
+              v-for="conversation in normalConversations"
               :key="conversation.id"
               class="conversation-item"
               :class="{ active: conversation.id === activeConversationId }"
@@ -3790,40 +3938,6 @@ onBeforeUnmount(() => {
               @contextmenu.prevent="openRenameMenu(conversation, $event)"
             >
               <span class="conversation-icon"><NIcon :component="SparklesOutline" /></span>
-              <span class="conversation-line">
-                <span class="conversation-title">{{ displayTitle(conversation.title) }}</span>
-              </span>
-              <span class="conversation-time">{{ formatTime(conversation.updatedAt) }}</span>
-              <span
-                class="conversation-delete"
-                role="button"
-                tabindex="0"
-                :aria-label="t('deleteSession')"
-                @click.stop="deleteTarget = conversation.id"
-                @keydown.enter.prevent="deleteTarget = conversation.id"
-              >
-                <NIcon :component="TrashOutline" />
-              </span>
-            </button>
-          </div>
-        </div>
-        <div class="conversation-group conversation-group--normal" :class="{ 'conversation-group--collapsed': chatCollapsed }">
-          <button type="button" class="conversation-group-label" :class="{ 'conversation-group-label--collapsed': chatCollapsed }" @click="chatCollapsed = !chatCollapsed">
-            <NIcon :component="chatCollapsed ? ChevronForwardOutline : ChevronDownOutline" />
-            <span>{{ t('timers.timerGroupNormal') }}</span>
-            <span class="conversation-group-count">{{ chatConversations.length }}</span>
-          </button>
-          <div v-if="!chatCollapsed" class="conversation-group-list">
-            <div v-if="!chatConversations.length && !conversationSearch.trim()" class="conversation-group-empty">{{ t('timers.timerGroupNormalEmpty') }}</div>
-            <button
-              v-for="conversation in chatConversations"
-              :key="conversation.id"
-              class="conversation-item"
-              :class="{ active: conversation.id === activeConversationId }"
-              @click="selectConversation(conversation.id)"
-              @contextmenu.prevent="openRenameMenu(conversation, $event)"
-            >
-              <span class="conversation-icon"><NIcon :component="ChatbubbleOutline" /></span>
               <span class="conversation-line">
                 <span class="conversation-title">{{ displayTitle(conversation.title) }}</span>
               </span>
@@ -3874,6 +3988,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </nav>
+      <div class="sidebar-management">
+        <button type="button" class="sidebar-nav-item" :aria-label="managementTitle" @click="openManagement()">
+          <NIcon :component="SettingsOutline" /><span>{{ managementTitle }}</span>
+        </button>
+      </div>
     </aside>
 
     <div
@@ -3918,6 +4037,11 @@ onBeforeUnmount(() => {
               <span class="locale-short">{{ localeShort }}</span>
             </NButton>
           </NDropdown>
+          <NDropdown :options="themeOptions" trigger="click" @select="onThemeSelect">
+            <NButton quaternary circle :aria-label="actionLabels.theme" :title="actionLabels.theme">
+              <template #icon><NIcon :component="resolvedTheme === 'dark' ? MoonOutline : SunnyOutline" /></template>
+            </NButton>
+          </NDropdown>
           <NButton quaternary circle :title="actionLabels.openVoiceCall" @click="openVoiceCall">
             <template #icon><NIcon :component="CallOutline" /></template>
           </NButton>
@@ -3949,18 +4073,15 @@ onBeforeUnmount(() => {
         <section ref="timeline" class="timeline" aria-live="polite" @scroll="onTimelineScroll" @wheel.passive="pauseAutoScrollByUser" @touchmove.passive="pauseAutoScrollByUser">
           <div v-if="noActiveConversation" class="welcome welcome--mode">
             <div class="mode-tabs" role="tablist">
-              <button type="button" class="mode-tab" :class="{ active: initialMode === 'chat' }" role="tab" :aria-selected="initialMode === 'chat'" @click="setInitialMode('chat')">
+              <button type="button" class="mode-tab" :class="{ active: currentAgentName === 'Chat' }" role="tab" :aria-selected="currentAgentName === 'Chat'" @click="selectAgent('Chat')">
                 <NIcon :component="ChatbubbleOutline" />{{ actionLabels.chatMode }}
               </button>
-              <button type="button" class="mode-tab" :class="{ active: initialMode === 'task' }" role="tab" :aria-selected="initialMode === 'task'" @click="setInitialMode('task')">
+              <button type="button" class="mode-tab" :class="{ active: currentAgentName !== 'Chat' }" role="tab" :aria-selected="currentAgentName !== 'Chat'" @click="selectAgent('default')">
                 <NIcon :component="ConstructOutline" />{{ actionLabels.taskMode }}
               </button>
             </div>
-            <h2>{{ initialMode === 'chat' ? actionLabels.chatMode : actionLabels.taskMode }}</h2>
-            <p>{{ initialMode === 'chat' ? actionLabels.chatModeDesc : actionLabels.taskModeDesc }}</p>
-            <div class="mode-feats">
-              <span v-for="f in (initialMode === 'chat' ? actionLabels.chatModeFeats : actionLabels.taskModeFeats)" :key="f">√ {{ f }}</span>
-            </div>
+            <h2>{{ displayAgentName(currentAgentName) }}</h2>
+            <p>{{ agentList.find((agent) => agent.name === currentAgentName)?.description || actionLabels.taskModeDesc }}</p>
           </div>
           <div v-else-if="!currentMessages.length" class="welcome">
           <div class="welcome-symbol"><NIcon :component="CodeSlashOutline" /></div>
@@ -4031,9 +4152,6 @@ onBeforeUnmount(() => {
                     {{ actionLabels.more }}
                   </NTooltip>
                   <div v-if="openMenuId === item.id" class="message-menu">
-                    <button type="button" class="message-menu-item" @click="addQuickCommandFromMessage(item)">
-                      <NIcon :component="SparklesOutline" />{{ actionLabels.addToQuickCommand }}
-                    </button>
                     <button type="button" class="message-menu-item" @click="deleteMessage(item)">
                       <NIcon :component="TrashOutline" />{{ actionLabels.deleteMessage }}
                     </button>
@@ -4173,30 +4291,12 @@ onBeforeUnmount(() => {
                   </template>
                   {{ t('upload') }}
                 </NTooltip>
-                <template v-if="!toolbarChatMode">
-                  <NDropdown :options="agentDropdownOptions" trigger="click" @select="selectAgent">
-                    <NButton quaternary size="small" class="toolbar-pill agent-pill" :aria-label="actionLabels.selectAgent">
-                      <template #icon><NIcon :component="SparklesOutline" /></template>{{ displayAgentName(currentAgentName) || actionLabels.agent }}
-                    </NButton>
-                  </NDropdown>
-                  <NButton quaternary size="small" class="toolbar-pill" :aria-label="actionLabels.subagents" :title="actionLabels.subagents" @click="openRightPanel('subagents')">
-                    <template #icon><NIcon :component="GitNetworkOutline" /></template>{{ actionLabels.subagents }}
+                <NDropdown :options="agentDropdownOptions" trigger="click" @select="selectAgent">
+                  <NButton quaternary size="small" class="toolbar-pill agent-pill" :aria-label="actionLabels.selectAgent">
+                    <template #icon><NIcon :component="SparklesOutline" /></template>{{ displayAgentName(currentAgentName) || actionLabels.agent }}
                   </NButton>
-                  <NButton quaternary size="small" class="toolbar-pill" :aria-label="actionLabels.skills" :title="actionLabels.skills" @click="openRightPanel('skills')">
-                    <template #icon><NIcon :component="CodeSlashOutline" /></template>{{ actionLabels.skills }}
-                  </NButton>
-                  <NButton quaternary size="small" class="toolbar-pill" :aria-label="actionLabels.tools" @click="openRightPanel('tools')">
-                    <template #icon><NIcon :component="ConstructOutline" /></template>{{ actionLabels.tools }}
-                  </NButton>
-                  <NButton quaternary size="small" class="toolbar-pill" :aria-label="actionLabels.knowledge" @click="openRightPanel('knowledge')">
-                    <template #icon><NIcon :component="BookOutline" /></template>{{ actionLabels.knowledge }}
-                  </NButton>
-                </template>
-                <template v-else>
-                  <NButton quaternary size="small" class="toolbar-pill agent-pill" :aria-label="actionLabels.chatMode" disabled>
-                    <template #icon><NIcon :component="SparklesOutline" /></template>{{ actionLabels.chatMode }}
-                  </NButton>
-                  <NTooltip>
+                </NDropdown>
+                <NTooltip>
                     <template #trigger>
                       <NButton
                         quaternary size="small"
@@ -4210,8 +4310,8 @@ onBeforeUnmount(() => {
                       </NButton>
                     </template>
                     {{ historyOn ? actionLabels.historyOn : actionLabels.historyOff }}
-                  </NTooltip>
-                  <NTooltip v-if="toolbarChatMode">
+                </NTooltip>
+                <NTooltip>
                     <template #trigger>
                       <NButton
                         quaternary size="small"
@@ -4225,75 +4325,44 @@ onBeforeUnmount(() => {
                       </NButton>
                     </template>
                     {{ actionLabels.webSearch }}
-                  </NTooltip>
-                  <NTooltip v-if="toolbarChatMode">
+                </NTooltip>
+                <NTooltip>
                     <template #trigger>
                       <NButton
                         quaternary size="small"
                         class="toolbar-pill"
                         :class="{ 'toolbar-pill--on': jpMarkOn }"
-                        aria-label="日语注音"
+                        :aria-label="t('jpMark')"
                         @click="jpMarkOn = !jpMarkOn; localStorage.setItem(JP_MARK_STORAGE_KEY, String(jpMarkOn)); focusComposer()"
                       >
                         <template #icon><NIcon :component="LanguageOutline" /></template>
-                        注音
+                        {{ t('jpMarkShort') }}
                       </NButton>
                     </template>
-                    日语汉字自动注音
-                  </NTooltip>
-                  <div v-if="toolbarChatMode" style="position:relative;display:inline-block;">
+                    {{ t('jpMarkTooltip') }}
+                </NTooltip>
+                <div style="position:relative;display:inline-block;">
                     <NButton
                       quaternary size="small"
                       class="toolbar-pill"
                       :class="{ 'toolbar-pill--on': !!systemOverrideName }"
-                      aria-label="角色预设"
+                      :aria-label="t('rolePreset')"
                       @click="showRolePresets = true; focusComposer()"
                     >
                       <template #icon><NIcon :component="PersonCircleOutline" /></template>
-                      {{ systemOverrideName || '角色预设' }}
+                      {{ systemOverrideName || t('rolePreset') }}
                     </NButton>
-                    <span v-if="systemOverrideName" class="role-clear-x" @click.stop="clearRole()" title="清除角色">✕</span>
+                    <span v-if="systemOverrideName" class="role-clear-x" @click.stop="clearRole()" :title="t('clearRole')">✕</span>
+                </div>
+                <NModal preset="card" style="width:80vw;height:80vh;max-width:900px" :bordered="false" :mask-closable="false" :close-on-esc="true" :title="t('rolePreset')" :show="showRolePresets" @update:show="showRolePresets = $event">
+                  <NInput v-model:value="roleSearch" size="small" :placeholder="t('searchRoles')" style="margin-bottom:12px" />
+                  <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto;">
+                    <div v-for="c in filteredRoles" :key="c.name" class="qc-card" :class="{ 'qc-card--active': c.name === systemOverrideName }" @click="chooseRole(c)">
+                      <div class="qc-title">{{ c.name }}</div>
+                      <div class="qc-preview">{{ c.preview }}</div>
+                    </div>
                   </div>
-                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;height:80vh;max-width:900px" :bordered="false" :mask-closable="false" :close-on-esc="true" title="角色预设" :show="showRolePresets" @update:show="showRolePresets = $event">
-                    <NInput v-model:value="roleSearch" size="small" placeholder="搜索角色..." style="margin-bottom:12px" />
-                    <div style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto;">
-                      <div class="qc-card qc-new" @click="openRoleEditor()">
-                        <span class="qc-new-plus">＋</span>
-                        <span class="qc-new-label">新建角色</span>
-                      </div>
-                      <div v-for="c in filteredRoles" :key="c.name" class="qc-card" :class="{ 'qc-card--active': c.name === systemOverrideName }" @click="chooseRole(c)">
-                        <span class="qc-actions" @click.stop>
-                          <button class="qc-btn" @click="openRoleEditor(c)">✎</button>
-                          <button class="qc-btn qc-btn-del" @click="deleteRole(c.name)">✕</button>
-                        </span>
-                        <div class="qc-title">{{ c.name }}</div>
-                        <div class="qc-preview">{{ c.preview }}</div>
-                      </div>
-                    </div>
-                  </NModal>
-
-                  <NModal v-if="toolbarChatMode" preset="card" style="width:80vw;max-width:1000px;height:80vh;" :mask-closable="false" title="角色编辑器" :show="showRoleEditor" @update:show="showRoleEditor = $event">
-                    <NInput v-model:value="roleEditorName" size="small" placeholder="角色名（将作为 .deepagents/roles/<名>.md）" style="margin-bottom:10px" />
-                    <div style="display:flex;gap:12px;height:calc(80vh - 180px);">
-                      <div style="flex:1;display:flex;flex-direction:column;min-width:0;">
-                        <div style="font-size:12px;color:#64748b;margin-bottom:4px;">提示词（markdown）</div>
-                        <textarea v-model="roleEditorContent" style="flex:1;width:100%;resize:none;border:1px solid #e2e8f0;border-radius:8px;padding:10px;font-size:13px;font-family:inherit;" placeholder="写入角色的 system prompt..."></textarea>
-                      </div>
-                      <div style="flex:1;display:flex;flex-direction:column;min-width:0;">
-                        <div style="font-size:12px;color:#64748b;margin-bottom:4px;">预览</div>
-                        <div style="flex:1;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px;padding:10px;background:#fafafa;">
-                          <MarkdownMessage :content="roleEditorContent" />
-                        </div>
-                      </div>
-                    </div>
-                    <template #footer>
-                      <div style="text-align:right;">
-                        <NButton size="small" style="margin-right:8px;" @click="showRoleEditor = false">取消</NButton>
-                        <NButton size="small" type="primary" @click="saveRole">保存</NButton>
-                      </div>
-                    </template>
-                  </NModal>
-                </template>
+                </NModal>
               </div>
               <div class="composer-toolbar-right">
                 <NPopover v-if="modelList.length" placement="top" :show-arrow="false" :delay="150" trigger="hover">
@@ -4341,7 +4410,7 @@ onBeforeUnmount(() => {
               </div>            </div>
           </div>
         </div>
-        <div v-if="!activeConversationId" class="composer-column"><QuickCommandBar ref="qcBar" :agents="agentList" :models="modelList" :current-agent="currentAgentName" :current-model="currentModel" @invoke="onQuickCommand" /></div>
+        <div v-if="!activeConversationId" class="composer-column"><QuickCommandBar ref="qcBar" @invoke="onQuickCommand" /></div>
       </div>
     </section>
 
@@ -4360,6 +4429,7 @@ onBeforeUnmount(() => {
       <NDrawerContent :title="t('recentConversations')">
         <div class="drawer-list">
           <NButton type="primary" block @click="openNewConversation"><template #icon><NIcon :component="AddOutline" /></template>{{ t('newConversation') }}</NButton>
+          <NButton block @click="sidebarVisible = false; openManagement()"><template #icon><NIcon :component="SettingsOutline" /></template>{{ managementTitle }}</NButton>
           <NInput v-model:value="conversationSearch" size="small" clearable :placeholder="t('searchConversations')">
             <template #prefix><NIcon :component="SearchOutline" /></template>
           </NInput>
@@ -4370,38 +4440,70 @@ onBeforeUnmount(() => {
       </NDrawerContent>
     </NDrawer>
 
-    <aside class="right-panel" :class="{ 'right-panel--open': rightPanelVisible }">
-      <div class="right-panel-header">
-        <strong>{{ rightPanelTitle }}</strong>
-        <NButton v-if="rightPanelTab !== 'timers'" quaternary circle size="small" :aria-label="actionLabels.close" :title="actionLabels.close" @click="rightPanelVisible = false">
-          <template #icon><NIcon :component="CloseOutline" /></template>
-        </NButton>
-      </div>
-      <div class="right-panel-body">
-        <div v-if="rightPanelTab === 'skills' || rightPanelTab === 'tools' || rightPanelTab === 'knowledge'" class="panel-search">
-          <NInput v-model:value="panelQuery" size="small" clearable :placeholder="actionLabels.searchPlaceholder">
-            <template #prefix><NIcon :component="SearchOutline" /></template>
-          </NInput>
-        </div>
+    <ManagementCenter
+      :show="managementVisible"
+      :section="managementSection"
+      :title="managementTitle"
+      :items="managementMenuItems"
+      @update:show="managementVisible = $event"
+      @update:section="selectManagementSection"
+    >
+      <div class="management-page">
         <!-- 技能管理 -->
-        <div v-if="rightPanelTab === 'skills'" class="panel-section">
+        <div v-if="managementSection === 'skills'" class="panel-section">
+          <div class="panel-section-actions">
+            <NInput v-model:value="panelQuery" size="small" clearable :placeholder="actionLabels.searchPlaceholder" class="panel-search-input">
+              <template #prefix><NIcon :component="SearchOutline" /></template>
+            </NInput>
+            <NButton size="small" type="primary" @click="openSkillEdit()">
+              <template #icon><NIcon :component="AddOutline" /></template>{{ actionLabels.newSkill }}
+            </NButton>
+          </div>
           <div v-if="!filteredSkills.length" class="panel-placeholder"><p>{{ panelQuery ? actionLabels.noMatch : actionLabels.emptyList }}</p></div>
-          <div v-for="skill in filteredSkills" :key="skill.name" class="manage-card" :class="{ 'manage-card--disabled': !skill.enabled }">
-            <div class="manage-card-head">
-              <strong class="manage-card-title">{{ skill.name }}</strong>
-              <NSwitch size="small" :value="skill.enabled" @update:value="toggleSkill(skill.name)" />
-            </div>
-            <p v-if="skill.description" class="manage-card-desc" :title="skill.description">{{ skill.description }}</p>
-            <div class="manage-card-actions">
-              <NButton quaternary size="tiny" @click="openSkillEdit(skill)">{{ actionLabels.edit }}</NButton>
+          <div v-else class="resource-card-list">
+            <div v-for="skill in filteredSkills" :key="skill.name" class="manage-card manage-card--actionable">
+              <div class="manage-card-head">
+                <strong class="manage-card-title manage-title-with-icon">
+                  <NIcon :component="CodeSlashOutline" />{{ skill.name }}
+                </strong>
+              </div>
+              <p v-if="skill.description" class="manage-card-desc" :title="skill.description">{{ skill.description }}</p>
+              <div class="manage-card-actions manage-card-actions--overlay">
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" :aria-label="actionLabels.edit" @click="openSkillEdit(skill)">
+                      <template #icon><NIcon :component="CreateOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.edit }}
+                </NTooltip>
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" type="error" :aria-label="actionLabels.delete" @click="deleteSkill(skill)">
+                      <template #icon><NIcon :component="TrashOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.delete }}
+                </NTooltip>
+              </div>
             </div>
           </div>
         </div>
         <!-- 工具（MCP）管理 -->
-        <div v-else-if="rightPanelTab === 'tools'" class="panel-section">
+        <div v-else-if="managementSection === 'tools'" class="panel-section">
+          <div class="panel-section-actions">
+            <NInput v-model:value="panelQuery" size="small" clearable :placeholder="actionLabels.searchPlaceholder" class="panel-search-input">
+              <template #prefix><NIcon :component="SearchOutline" /></template>
+            </NInput>
+            <NButton size="small" type="primary" @click="openToolEdit()">
+              <template #icon><NIcon :component="AddOutline" /></template>{{ actionLabels.newTool }}
+            </NButton>
+          </div>
           <template v-if="filteredBuiltinTools.length">
             <div class="panel-group-head">
-              <span class="panel-group-label">{{ actionLabels.builtinTools }}</span>
+              <span class="panel-group-label manage-title-with-icon">
+                <NIcon :component="CodeSlashOutline" />{{ actionLabels.builtinTools }}
+              </span>
               <span class="panel-group-count">{{ filteredBuiltinTools.length }}</span>
             </div>
             <div class="builtin-tool-list">
@@ -4409,10 +4511,7 @@ onBeforeUnmount(() => {
                 v-for="tool in filteredBuiltinTools"
                 :key="tool.name"
                 class="builtin-tool-chip"
-                :class="{ 'builtin-tool-chip--active': innerToolEnabled(tool.name) }"
                 :title="tool.description"
-                role="button"
-                @click="toggleInnerTool(tool.name)"
               >
                 <code>{{ tool.name }}</code>
               </span>
@@ -4420,29 +4519,40 @@ onBeforeUnmount(() => {
           </template>
           <template v-if="filteredToolList.length">
             <div class="panel-group-head panel-group-head--mcp">
-              <span class="panel-group-label">{{ actionLabels.mcpServers }}</span>
+              <span class="panel-group-label manage-title-with-icon">
+                <NIcon :component="ConstructOutline" />{{ actionLabels.mcpServers }}
+              </span>
               <span class="panel-group-count">{{ filteredToolList.length }}</span>
             </div>
-            <div v-for="tool in filteredToolList" :key="tool.name" class="manage-card" :class="{ 'manage-card--disabled': !tool.enabled }">
-              <div class="manage-card-head manage-card-head--group" @click="toggleToolGroup(tool.name)">
-                <span class="tool-group-left">
-                  <span class="tool-group-caret">{{ expandedToolGroups.includes(tool.name) ? '▾' : '▸' }}</span>
-                  <span class="manage-card-title">{{ tool.name }}</span>
-                  <span v-if="tool.tools?.length" class="tool-count">{{ tool.tools.length }}</span>
-                </span>
-                <NSwitch size="small" :value="tool.enabled" @update:value="toggleTool(tool.name)" @click.stop />
-              </div>
-              <p v-if="tool.description" class="manage-card-desc" :title="tool.description">{{ tool.description }}</p>
-              <code v-if="tool.command" class="manage-card-cmd">{{ tool.command }}</code>
-              <div v-if="expandedToolGroups.includes(tool.name)" class="tool-item-list">
-                <div v-for="t in tool.tools || []" :key="t.name" class="tool-item" :class="{ 'tool-item--disabled': !t.enabled }">
-                  <div class="tool-item-head">
-                    <code>{{ t.name }}</code>
-                    <NSwitch size="small" :value="t.enabled" :disabled="!tool.enabled" @update:value="toggleToolItem(tool.name, t.name)" />
-                  </div>
-                  <p v-if="t.description" class="tool-item-desc">{{ t.description }}</p>
+            <div class="resource-card-list">
+              <div v-for="tool in filteredToolList" :key="tool.name" class="manage-card manage-card--actionable">
+                <div class="manage-card-head manage-card-head--group" @click="toggleToolGroup(tool.name)">
+                  <span class="tool-group-left">
+                    <span class="tool-group-caret">{{ expandedToolGroups.includes(tool.name) ? '▾' : '▸' }}</span>
+                    <span class="manage-card-title">{{ tool.name }}</span>
+                    <span v-if="tool.tools?.length" class="tool-count">{{ tool.tools.length }}</span>
+                  </span>
                 </div>
-                <div v-if="!(tool.tools || []).length" class="panel-placeholder"><p>{{ actionLabels.emptyList }}</p></div>
+                <div class="manage-card-actions manage-card-actions--overlay">
+                  <NTooltip>
+                    <template #trigger>
+                      <NButton quaternary circle size="tiny" :aria-label="actionLabels.edit" @click.stop="openToolEdit(tool)">
+                        <template #icon><NIcon :component="CreateOutline" /></template>
+                      </NButton>
+                    </template>
+                    {{ actionLabels.edit }}
+                  </NTooltip>
+                </div>
+                <code v-if="tool.command" class="manage-card-cmd">{{ tool.command }}</code>
+                <div v-if="expandedToolGroups.includes(tool.name)" class="tool-item-list">
+                  <div v-for="t in tool.tools || []" :key="t.name" class="tool-item">
+                    <div class="tool-item-head">
+                      <code>{{ t.name }}</code>
+                    </div>
+                    <p v-if="t.description" class="tool-item-desc">{{ t.description }}</p>
+                  </div>
+                  <div v-if="!(tool.tools || []).length" class="panel-placeholder"><p>{{ actionLabels.emptyList }}</p></div>
+                </div>
               </div>
             </div>
           </template>
@@ -4451,7 +4561,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <!-- Agent 管理 -->
-        <div v-else-if="rightPanelTab === 'agents'" class="panel-section">
+        <div v-else-if="managementSection === 'agents'" class="panel-section">
           <div class="panel-section-actions">
             <NInput v-model:value="panelQuery" size="small" clearable :placeholder="actionLabels.searchPlaceholder" class="panel-search-input">
               <template #prefix><NIcon :component="SearchOutline" /></template>
@@ -4461,75 +4571,182 @@ onBeforeUnmount(() => {
             </NButton>
           </div>
           <div v-if="!filteredAgents.length" class="panel-placeholder"><p>{{ panelQuery ? actionLabels.noMatch : actionLabels.emptyList }}</p></div>
-          <div v-for="agent in filteredAgents" :key="agent.name" class="manage-card" :class="{ 'manage-card--disabled': !agent.enabled }">
-            <div class="manage-card-head">
-              <strong>{{ displayAgentName(agent.name) }}</strong>
-              <span v-if="agent.name === currentAgentName" class="agent-current">{{ actionLabels.currentAgent }}</span>
+          <div v-else class="resource-card-list">
+            <div v-for="agent in filteredAgents" :key="agent.name" class="manage-card manage-card--actionable" :class="{ 'manage-card--disabled': !agent.enabled }">
+              <div class="manage-card-head">
+                <strong class="manage-title-with-icon">
+                  <NIcon :component="SparklesOutline" />{{ displayAgentName(agent.name) }}
+                </strong>
+              </div>
+              <p v-if="agent.description" class="manage-card-desc" :title="agent.description">{{ agent.description }}</p>
+              <div v-if="(agent.subagents || []).length" class="manage-card-chips">
+                <span class="manage-chip-label">{{ actionLabels.linkedSubagents }}</span>
+                <NTag v-for="s in agent.subagents.slice(0, 4)" :key="s" size="small" type="warning">{{ displayAgentName(s) }}</NTag>
+                <NTag v-if="agent.subagents.length > 4" size="small">+{{ agent.subagents.length - 4 }}</NTag>
+              </div>
+              <div v-if="agentSkillNames(agent).length" class="manage-card-chips">
+                <NTag v-for="s in agentSkillNames(agent).slice(0, 4)" :key="s" size="small" type="info">{{ s }}</NTag>
+                <NTag v-if="agentSkillNames(agent).length > 4" size="small">+{{ agentSkillNames(agent).length - 4 }}</NTag>
+              </div>
+              <div v-if="agentToolNames(agent).length" class="manage-card-chips">
+                <NTag v-for="toolName in agentToolNames(agent).slice(0, 6)" :key="toolName" size="small" type="success">{{ toolName }}</NTag>
+                <NTag v-if="agentToolNames(agent).length > 6" size="small">+{{ agentToolNames(agent).length - 6 }}</NTag>
+              </div>
+              <div v-if="(agent.knowledge || []).length" class="manage-card-chips">
+                <span class="manage-chip-label">{{ actionLabels.linkedKnowledge }}</span>
+                <NTag v-for="knowledgeId in agent.knowledge.slice(0, 3)" :key="knowledgeId" size="small" type="warning">{{ knowledgeId }}</NTag>
+                <NTag v-if="agent.knowledge.length > 3" size="small">+{{ agent.knowledge.length - 3 }}</NTag>
+              </div>
+              <div class="manage-card-actions manage-card-actions--overlay">
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" :aria-label="actionLabels.edit" @click="openAgentEdit(agent)">
+                      <template #icon><NIcon :component="CreateOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.edit }}
+                </NTooltip>
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" type="error" :aria-label="actionLabels.delete" :disabled="agent.name === 'default'" @click="deleteAgent(agent)">
+                      <template #icon><NIcon :component="TrashOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.delete }}
+                </NTooltip>
+              </div>
             </div>
-            <p v-if="agent.description" class="manage-card-desc" :title="agent.description">{{ agent.description }}</p>
-            <div v-if="(agent.subagents || []).length" class="manage-card-chips">
-            <span class="manage-chip-label">{{ actionLabels.linkedSubagents }}</span>
-            <NTag v-for="s in agent.subagents" :key="s" size="small" type="warning">{{ displayAgentName(s) }}</NTag>
-          </div>
-          <div v-if="(agent.skills || []).length" class="manage-card-chips">
-              <span class="manage-chip-label">{{ actionLabels.linkedSkills }}</span>
-              <NTag v-for="s in agent.skills" :key="s" size="small" type="info">{{ s }}</NTag>
-            </div>
-            <div v-if="(agent.tools || []).length" class="manage-card-chips">
-              <span class="manage-chip-label">{{ actionLabels.linkedTools }}</span>
-              <NTag v-for="t in agent.tools" :key="t" size="small" type="success">{{ t }}</NTag>
-            </div>
-            <div class="manage-card-actions">
-              <NButton quaternary size="tiny" @click="openAgentEdit(agent)">{{ actionLabels.edit }}</NButton>
-              <NButton quaternary size="tiny" type="error" :disabled="agent.name === 'default'" @click="deleteAgent(agent)">{{ actionLabels.delete }}</NButton>
-            </div>
-          </div>
-        </div>
-        <!-- 子 Agent 面板 -->
-        <div v-else-if="rightPanelTab === 'subagents'" class="panel-section">
-          <div v-if="!subagentList.length" class="panel-placeholder"><p>{{ actionLabels.emptyList }}</p></div>
-          <div v-for="agent in subagentList" :key="agent.name" class="manage-card" :class="{ 'manage-card--sub-linked': isSubagentOfCurrent(agent.name) }" @click.stop>
-            <div class="manage-card-head">
-              <strong>{{ displayAgentName(agent.name) }}</strong>
-              <span class="manage-card-head-right">
-                <NSwitch size="small" :value="isSubagentOfCurrent(agent.name)" :disabled="isBuiltinAgent(agent.name)" @update:value="(v: boolean) => toggleSubagent(agent, v)" />
-              </span>
-            </div>
-            <p v-if="agent.description" class="manage-card-desc" :title="agent.description">{{ agent.description }}</p>
           </div>
         </div>
         <!-- 知识库管理 -->
-<div v-else-if="rightPanelTab === 'knowledge'" class="panel-section panel-section--knowledge">
-  <NAlert v-if="!knowledgeConfig.reachable" type="warning" :show-icon="true" class="knowledge-alert">
-    <div class="knowledge-alert-row">
-      <span>{{ actionLabels.knowledgeUnreachable }}</span>
-      <NButton size="tiny" type="warning" :loading="knowledgeStarting" :disabled="knowledgeStarting" @click="startKnowledge()">
-        {{ knowledgeStarting ? actionLabels.knowledgeStarting : actionLabels.knowledgeStart }}
-      </NButton>
-    </div>
-  </NAlert>
-  <div v-if="!filteredKnowledge.length" class="panel-placeholder">
-    <p>{{ panelQuery ? actionLabels.noMatch : actionLabels.emptyList }}</p>
-  </div>
-  <div v-for="kb in filteredKnowledge" :key="kb.id" class="manage-card" :class="{ 'manage-card--disabled': !kb.enabled }">
-    <div class="manage-card-head">
-      <strong class="manage-card-title">{{ kb.name }}</strong>
-      <NTag size="small" :type="kb.type === 'vector' ? 'info' : 'default'">{{ kb.type === 'vector' ? actionLabels.knowledgeVector : actionLabels.knowledgeNormal }}</NTag>
-      <NSwitch size="small" :value="kb.enabled" :disabled="!knowledgeConfig.reachable" @update:value="toggleKnowledge(kb)" />
-    </div>
-    <p v-if="kb.documentCount !== undefined || kb.recordCount !== undefined" class="manage-card-desc">
-      {{ actionLabels.knowledgeDocs }}: {{ kb.documentCount ?? 0 }} · {{ actionLabels.knowledgeRecords }}: {{ kb.recordCount ?? 0 }}
-    </p>
-  </div>
-  <div class="knowledge-manage-btn">
-    <NButton size="small" type="error" quaternary :loading="knowledgeStopping" :disabled="!knowledgeConfig.reachable || knowledgeStopping" @click="stopKnowledge()">
-      <template #icon v-if="!knowledgeStopping"><NIcon :component="StopOutline" /></template>{{ knowledgeStopping ? actionLabels.knowledgeStopping : actionLabels.knowledgeStop }}
-    </NButton>
-    <NButton size="small" :disabled="!knowledgeConfig.reachable" @click="openKnowledgeManager()">{{ actionLabels.knowledgeManage }}</NButton>
-  </div>
-</div>
-<!-- 定时任务管理 -->
-        <div v-else-if="rightPanelTab === 'timers'" class="panel-section panel-section--timers">
+        <div v-else-if="managementSection === 'knowledge'" class="panel-section panel-section--knowledge">
+          <div class="panel-section-actions">
+            <NInput v-model:value="panelQuery" size="small" clearable :placeholder="actionLabels.searchPlaceholder" class="panel-search-input">
+              <template #prefix><NIcon :component="SearchOutline" /></template>
+            </NInput>
+            <NButton size="small" type="primary" :disabled="!knowledgeConfig.reachable" @click="openKnowledgeManager()">
+              <template #icon><NIcon :component="AddOutline" /></template>{{ actionLabels.knowledgeManage }}
+            </NButton>
+          </div>
+          <NAlert v-if="!knowledgeConfig.reachable" type="warning" :show-icon="true" class="knowledge-alert">
+            <div class="knowledge-alert-row">
+              <span>{{ actionLabels.knowledgeUnreachable }}</span>
+              <NButton size="tiny" type="warning" :loading="knowledgeStarting" :disabled="knowledgeStarting" @click="startKnowledge()">
+                {{ knowledgeStarting ? actionLabels.knowledgeStarting : actionLabels.knowledgeStart }}
+              </NButton>
+            </div>
+          </NAlert>
+          <div v-if="!filteredKnowledge.length" class="panel-placeholder">
+            <p>{{ panelQuery ? actionLabels.noMatch : actionLabels.emptyList }}</p>
+          </div>
+          <div v-else class="resource-card-list">
+            <div v-for="kb in filteredKnowledge" :key="kb.id" class="manage-card">
+              <div class="manage-card-head">
+                <strong class="manage-card-title">{{ kb.name }}</strong>
+                <NTag size="small" :type="kb.type === 'vector' ? 'info' : 'default'">{{ kb.type === 'vector' ? actionLabels.knowledgeVector : actionLabels.knowledgeNormal }}</NTag>
+              </div>
+              <p v-if="kb.documentCount !== undefined || kb.recordCount !== undefined" class="manage-card-desc">
+                {{ actionLabels.knowledgeDocs }}: {{ kb.documentCount ?? 0 }} · {{ actionLabels.knowledgeRecords }}: {{ kb.recordCount ?? 0 }}
+              </p>
+            </div>
+          </div>
+          <div class="knowledge-manage-btn">
+            <NButton size="small" type="error" quaternary :loading="knowledgeStopping" :disabled="!knowledgeConfig.reachable || knowledgeStopping" @click="stopKnowledge()">
+              <template #icon v-if="!knowledgeStopping"><NIcon :component="StopOutline" /></template>{{ knowledgeStopping ? actionLabels.knowledgeStopping : actionLabels.knowledgeStop }}
+            </NButton>
+          </div>
+        </div>
+        <!-- 角色预设管理 -->
+        <div v-else-if="managementSection === 'roles'" class="panel-section">
+          <div class="panel-section-actions">
+            <NInput v-model:value="roleSearch" size="small" clearable :placeholder="t('searchRoles')" class="panel-search-input">
+              <template #prefix><NIcon :component="SearchOutline" /></template>
+            </NInput>
+            <NButton size="small" type="primary" @click="openRoleEditor()">
+              <template #icon><NIcon :component="AddOutline" /></template>{{ t('newRole') }}
+            </NButton>
+          </div>
+          <div v-if="!filteredRoles.length" class="panel-placeholder"><p>{{ roleSearch ? actionLabels.noMatch : actionLabels.emptyList }}</p></div>
+          <div v-else class="resource-card-list resource-card-list--two-columns">
+            <div v-for="role in filteredRoles" :key="role.name" class="manage-card manage-card--actionable">
+              <div class="manage-card-head">
+                <strong class="manage-card-title manage-title-with-icon">
+                  <NIcon :component="PersonCircleOutline" />{{ role.name }}
+                </strong>
+                <NTag v-if="role.builtin" size="small">{{ locale === 'zh' ? '内置' : locale === 'ja' ? '組み込み' : 'Built-in' }}</NTag>
+              </div>
+              <p class="manage-card-desc" :title="role.preview || role.content">{{ role.preview || role.content }}</p>
+              <div class="manage-card-actions manage-card-actions--overlay">
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" :aria-label="actionLabels.edit" :disabled="role.builtin" @click="openRoleEditor(role)">
+                      <template #icon><NIcon :component="CreateOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.edit }}
+                </NTooltip>
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" type="error" :aria-label="actionLabels.delete" :disabled="role.builtin" @click="deleteRole(role.name)">
+                      <template #icon><NIcon :component="TrashOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.delete }}
+                </NTooltip>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 快捷指令管理 -->
+        <div v-else-if="managementSection === 'commands'" class="panel-section">
+          <div class="panel-section-actions">
+            <NInput v-model:value="commandSearch" size="small" clearable :placeholder="actionLabels.searchPlaceholder" class="panel-search-input">
+              <template #prefix><NIcon :component="SearchOutline" /></template>
+            </NInput>
+            <NButton size="small" type="primary" @click="openCommandEdit()">
+              <template #icon><NIcon :component="AddOutline" /></template>{{ t('quickCommands.new') }}
+            </NButton>
+          </div>
+          <div v-if="!filteredManagementQuickCommands.length" class="panel-placeholder">
+            <p>{{ commandSearch ? actionLabels.noMatch : actionLabels.emptyList }}</p>
+          </div>
+          <div v-else class="resource-card-list resource-card-list--two-columns">
+            <div v-for="command in filteredManagementQuickCommands" :key="command.id" class="manage-card manage-card--actionable">
+              <div class="manage-card-head">
+                <strong class="manage-card-title manage-title-with-icon">
+                  <NIcon :component="FlashOutline" />{{ command.title }}
+                </strong>
+              </div>
+              <p class="manage-card-desc" :title="command.content">{{ command.content }}</p>
+              <div class="manage-card-chips">
+                <NTag size="small" type="success">{{ displayAgentName(command.agent) }}</NTag>
+                <NTag size="small" type="info">{{ command.model || t('quickCommands.defaultModel') }}</NTag>
+                <NTag v-if="command.role" size="small" type="warning">{{ command.role }}</NTag>
+                <NTag v-if="command.showOnHome !== false" size="small">{{ t('quickCommands.shownOnHome') }}</NTag>
+              </div>
+              <div class="manage-card-actions manage-card-actions--overlay">
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" :aria-label="actionLabels.edit" @click="openCommandEdit(command)">
+                      <template #icon><NIcon :component="CreateOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.edit }}
+                </NTooltip>
+                <NTooltip>
+                  <template #trigger>
+                    <NButton quaternary circle size="tiny" type="error" :aria-label="actionLabels.delete" @click="deleteManagementQuickCommand(command)">
+                      <template #icon><NIcon :component="TrashOutline" /></template>
+                    </NButton>
+                  </template>
+                  {{ actionLabels.delete }}
+                </NTooltip>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 定时任务管理 -->
+        <div v-else-if="managementSection === 'timers'" class="panel-section panel-section--timers">
           <div class="panel-section-actions">
             <NInput v-model:value="timerSearch" size="small" clearable :placeholder="t('timers.search')" class="panel-search-input">
               <template #prefix><NIcon :component="SearchOutline" /></template>
@@ -4584,12 +4801,81 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-<!-- 设置（占位） -->
-        <div v-else class="panel-placeholder">
-          <p>{{ actionLabels.panelComingSoon }}</p>
+      </div>
+    </ManagementCenter>
+
+    <NModal preset="card" style="width:80vw;max-width:1000px;height:80vh;" :mask-closable="false" :title="t('roleEditor')" :show="showRoleEditor" @update:show="showRoleEditor = $event">
+      <NInput v-model:value="roleEditorName" size="small" :placeholder="t('roleNamePlaceholder')" style="margin-bottom:10px" />
+      <div class="role-editor-layout">
+        <div class="role-editor-column">
+          <div class="manage-form-label">{{ t('rolePrompt') }}</div>
+          <textarea v-model="roleEditorContent" class="role-editor-textarea" :placeholder="t('rolePromptPlaceholder')"></textarea>
+        </div>
+        <div class="role-editor-column">
+          <div class="manage-form-label">{{ t('preview') }}</div>
+          <div class="role-editor-preview">
+            <MarkdownMessage :content="roleEditorContent" />
+          </div>
         </div>
       </div>
-    </aside>
+      <template #footer>
+        <div class="manage-modal-footer">
+          <NButton size="small" @click="showRoleEditor = false">{{ t('quickCommands.cancel') }}</NButton>
+          <NButton size="small" type="primary" @click="saveRole">{{ t('quickCommands.save') }}</NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <NModal :show="commandModalVisible" :mask-closable="false" @update:show="commandModalVisible = $event">
+      <NCard :title="editingCommandId ? t('quickCommands.edit') : t('quickCommands.new')" :bordered="false" class="manage-modal" role="dialog">
+        <div class="manage-form">
+          <label class="manage-form-label">{{ t('quickCommands.title') }}</label>
+          <NInput v-model:value="commandForm.title" :placeholder="t('quickCommands.titlePlaceholder')" maxlength="30" show-count />
+          <label class="manage-form-label">{{ t('quickCommands.rolePreset') }}</label>
+          <NSelect v-model:value="commandForm.role" :options="commandRoleOptions" />
+          <label class="manage-form-label">{{ t('quickCommands.prefill') }}</label>
+          <NInput v-model:value="commandForm.content" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" :placeholder="t('quickCommands.prefillPlaceholder')" />
+          <div class="quick-command-form-grid">
+            <div>
+              <label class="manage-form-label">{{ t('quickCommands.agent') }}</label>
+              <NSelect v-model:value="commandForm.agent" :options="commandAgentOptions" />
+            </div>
+            <div>
+              <label class="manage-form-label">{{ t('quickCommands.model') }}</label>
+              <NSelect v-model:value="commandForm.model" :options="commandModelOptions" />
+            </div>
+          </div>
+          <div class="quick-command-form-grid">
+            <div class="manage-form-row">
+              <span>{{ t('quickCommands.webSearch') }}</span>
+              <NSwitch v-model:value="commandForm.webSearchOn" size="small" />
+            </div>
+            <div class="manage-form-row">
+              <span>{{ t('quickCommands.history') }}</span>
+              <NSwitch v-model:value="commandForm.historyOn" size="small" />
+            </div>
+          </div>
+          <div class="quick-command-form-grid">
+            <div class="manage-form-row">
+              <span>{{ t('quickCommands.jpMark') }}</span>
+              <NSwitch v-model:value="commandForm.jpMarkOn" size="small" />
+            </div>
+            <div class="manage-form-row">
+              <span>{{ t('quickCommands.autoSend') }}</span>
+              <NSwitch v-model:value="commandForm.autoSend" size="small" />
+            </div>
+          </div>
+          <div class="manage-form-row">
+            <span>{{ t('quickCommands.showOnHome') }}</span>
+            <NSwitch v-model:value="commandForm.showOnHome" size="small" />
+          </div>
+          <div class="manage-form-actions">
+            <NButton @click="commandModalVisible = false">{{ t('quickCommands.cancel') }}</NButton>
+            <NButton type="primary" @click="saveManagementQuickCommand">{{ t('quickCommands.save') }}</NButton>
+          </div>
+        </div>
+      </NCard>
+    </NModal>
 
     <!-- 定时任务新建/编辑弹窗 -->
     <NModal :show="timerEditVisible" :mask-closable="false" @after-leave="timerEditVisible = false">
@@ -4758,17 +5044,136 @@ onBeforeUnmount(() => {
             <NInput v-model:value="agentForm.body" type="textarea" :placeholder="actionLabels.taskDetail" />
           </div>
           <div class="manage-form-right">
-            <div class="manage-form-field">
+            <div class="agent-association-section">
               <label class="manage-form-label">{{ actionLabels.linkedSubagents }}</label>
-              <NTransfer v-model:value="agentForm.subagents" :options="agentSubagentOptions" size="small" :titles="[actionLabels.available, actionLabels.selected]" />
+              <div v-if="agentSubagentOptions.length" class="agent-checkbox-list">
+                <NCheckbox
+                  v-for="option in agentSubagentOptions"
+                  :key="option.value"
+                  :checked="agentForm.subagents.includes(option.value)"
+                  @update:checked="(checked: boolean) => setAgentSubagent(option.value, checked)"
+                >
+                  {{ option.label }}
+                </NCheckbox>
+              </div>
+              <div v-else class="agent-association-empty">{{ actionLabels.emptyList }}</div>
             </div>
-            <div class="manage-form-field">
+            <div class="agent-association-section">
               <label class="manage-form-label">{{ actionLabels.linkedSkills }}</label>
-              <NTransfer v-model:value="agentForm.skills" :options="agentSkillOptions" size="small" :titles="[actionLabels.available, actionLabels.selected]" />
+              <div v-if="agentSkillOptions.length" class="agent-checkbox-list">
+                <NCheckbox
+                  v-for="option in agentSkillOptions"
+                  :key="option.value"
+                  :checked="agentForm.skills.includes(option.value)"
+                  @update:checked="(checked: boolean) => setAgentSkill(option.value, checked)"
+                >
+                  {{ option.label }}
+                </NCheckbox>
+              </div>
+              <div v-else class="agent-association-empty">{{ actionLabels.emptyList }}</div>
             </div>
-            <div class="manage-form-field">
+            <div class="agent-association-section agent-association-section--tools">
               <label class="manage-form-label">{{ actionLabels.linkedTools }}</label>
-              <NTransfer v-model:value="agentForm.tools" :options="agentToolOptions" size="small" :titles="[actionLabels.available, actionLabels.selected]" />
+              <div class="agent-tool-tree-node">
+                <div class="agent-tool-tree-row">
+                  <button
+                    type="button"
+                    class="agent-tool-tree-toggle"
+                    :aria-expanded="isAgentToolNodeExpanded('builtin')"
+                    @click="toggleAgentToolNode('builtin')"
+                  >
+                    <NIcon :component="isAgentToolNodeExpanded('builtin') ? ChevronDownOutline : ChevronForwardOutline" />
+                    <NIcon :component="FolderOutline" />
+                    <strong>{{ actionLabels.builtinTools }}</strong>
+                  </button>
+                  <NCheckbox
+                    :checked="isAgentBuiltinGroupChecked()"
+                    :indeterminate="isAgentBuiltinGroupIndeterminate()"
+                    @update:checked="setAgentBuiltinGroup"
+                  />
+                </div>
+                <div v-if="isAgentToolNodeExpanded('builtin')" class="agent-checkbox-list agent-checkbox-list--tools agent-tool-tree-children">
+                  <NCheckbox
+                    v-for="tool in builtinTools"
+                    :key="tool.name"
+                    :checked="agentForm.tools.inner_tools.includes(tool.name)"
+                    @update:checked="(checked: boolean) => setAgentBuiltinTool(tool.name, checked)"
+                  >
+                    {{ tool.name }}
+                  </NCheckbox>
+                </div>
+              </div>
+              <div class="agent-tool-tree-node">
+                <div class="agent-tool-tree-row">
+                  <button
+                    type="button"
+                    class="agent-tool-tree-toggle"
+                    :aria-expanded="isAgentToolNodeExpanded('mcp_server')"
+                    @click="toggleAgentToolNode('mcp_server')"
+                  >
+                    <NIcon :component="isAgentToolNodeExpanded('mcp_server') ? ChevronDownOutline : ChevronForwardOutline" />
+                    <NIcon :component="FolderOutline" />
+                    <strong>mcp_server</strong>
+                  </button>
+                  <span class="agent-tool-tree-count">{{ toolList.length }}</span>
+                </div>
+                <div v-if="isAgentToolNodeExpanded('mcp_server')" class="agent-mcp-server-list">
+                  <div v-for="server in toolList" :key="server.name" class="agent-tool-server">
+                    <div class="agent-tool-tree-row">
+                      <button
+                        type="button"
+                        class="agent-tool-tree-toggle"
+                        :aria-expanded="isAgentToolNodeExpanded(`mcp:${server.name}`)"
+                        @click="toggleAgentToolNode(`mcp:${server.name}`)"
+                      >
+                        <NIcon :component="isAgentToolNodeExpanded(`mcp:${server.name}`) ? ChevronDownOutline : ChevronForwardOutline" />
+                        <NIcon :component="FolderOutline" />
+                        <strong>{{ server.name }}</strong>
+                      </button>
+                      <NCheckbox
+                        :checked="isAgentMcpServerChecked(server)"
+                        :indeterminate="isAgentMcpServerIndeterminate(server)"
+                        @update:checked="(checked: boolean) => setAgentMcpServer(server, checked)"
+                      />
+                    </div>
+                    <div v-if="isAgentToolNodeExpanded(`mcp:${server.name}`)" class="agent-tool-children">
+                      <NCheckbox
+                        v-for="tool in server.tools || []"
+                        :key="tool.name"
+                        :checked="selectedAgentMcpTools(server.name).includes(tool.name)"
+                        @update:checked="(checked: boolean) => setAgentMcpTool(server.name, tool.name, checked)"
+                      >
+                        <span class="agent-tool-label" :title="`mcp_server/${server.name}/${tool.name}`">
+                          <code>{{ tool.name }}</code>
+                          <small v-if="tool.description">{{ tool.description }}</small>
+                        </span>
+                      </NCheckbox>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="!toolList.length && isAgentToolNodeExpanded('mcp_server')" class="agent-association-empty">
+                  {{ actionLabels.emptyList }}
+                </div>
+              </div>
+            </div>
+            <div class="agent-association-section">
+              <label class="manage-form-label">{{ actionLabels.linkedKnowledge }}</label>
+              <div v-if="agentKnowledgeChoices.length" class="agent-checkbox-list">
+                <NCheckbox
+                  v-for="knowledge in agentKnowledgeChoices"
+                  :key="knowledge.id"
+                  :checked="agentForm.knowledge.includes(knowledge.id)"
+                  @update:checked="(checked: boolean) => setAgentKnowledge(knowledge.id, checked)"
+                >
+                  <span class="agent-knowledge-label">
+                    <span>{{ knowledge.name }}</span>
+                    <small>{{ knowledge.documentCount }} {{ actionLabels.knowledgeDocs }}</small>
+                  </span>
+                </NCheckbox>
+              </div>
+              <div v-else class="agent-association-empty">
+                {{ knowledgeConfig.reachable ? actionLabels.emptyList : actionLabels.knowledgeUnreachable }}
+              </div>
             </div>
           </div>
         </div>
@@ -4845,6 +5250,8 @@ onBeforeUnmount(() => {
       </NCard>
     </NModal>
 
+    <StatisticsModal v-model:show="statisticsVisible" />
+
 
     <!-- Centered delete-session confirmation (NPopconfirm drifted inside the
          scrolling conversation list, so this uses a centered dialog instead) -->
@@ -4878,29 +5285,29 @@ onBeforeUnmount(() => {
 <style scoped>
 .process-collapse { margin: 2px 0 10px; background:transparent; border:none; border-radius:0; }
 .role-pop { display:flex; flex-direction:column; gap:6px; max-height:300px; overflow-y:auto; }
-.qc-card { position:relative; flex:0 0 220px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; transition:all .15s; }
-.qc-card:hover { border-color:#2563eb; background:#eff6ff; }
-.qc-card--active { border-color:#2563eb; background:#eff6ff; }
+.qc-card { position:relative; flex:0 0 220px; padding:10px 12px; border:1px solid var(--ui-border); border-radius:10px; background:var(--ui-surface); color:var(--ui-text); cursor:pointer; transition:all .15s; }
+.qc-card:hover { border-color:var(--ui-primary); background:var(--ui-primary-soft); }
+.qc-card--active { border-color:var(--ui-primary); background:var(--ui-primary-soft); }
 .qc-actions { position:absolute; top:4px; right:4px; display:none; gap:2px; }
 .qc-card:hover .qc-actions { display:flex; }
-.qc-btn { border:0; background:transparent; cursor:pointer; font-size:11px; color:#64748b; padding:0 2px; }
-.qc-btn-del:hover { color:#ef4444; }
+.qc-btn { border:0; background:transparent; cursor:pointer; font-size:11px; color:var(--ui-text-muted); padding:0 2px; }
+.qc-btn-del:hover { color:var(--ui-error); }
 .role-clear-x { position:absolute; top:-4px; right:-4px; width:14px; height:14px; border-radius:50%; background:#ef4444; color:#fff; font-size:10px; line-height:14px; text-align:center; cursor:pointer; display:none; }
 .role-clear-x:hover { background:#dc2626; }
 div:hover > .role-clear-x { display:block; }
 .qc-card .qc-title { font-size:13px; font-weight:600; }
-.qc-card .qc-preview { font-size:12px; color:#94a3b8; margin-top:4px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
-.qc-card.qc-new { display:flex; flex-direction:column; align-items:center; justify-content:center; border-style:dashed; color:#94a3b8; }
+.qc-card .qc-preview { font-size:12px; color:var(--ui-text-muted); margin-top:4px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.qc-card.qc-new { display:flex; flex-direction:column; align-items:center; justify-content:center; border-style:dashed; color:var(--ui-text-muted); }
 .qc-new-plus { font-size:20px; }
 .qc-new-label { font-size:12px; margin-top:4px; }
 .qc-tags { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
-.qc-tag { font-size:10px; padding:1px 6px; border-radius:4px; background:#f1f5f9; color:#64748b; }
-.qc-tag--info { background:#eff6ff; color:#2563eb; }
+.qc-tag { font-size:10px; padding:1px 6px; border-radius:4px; background:var(--ui-surface-muted); color:var(--ui-text-muted); }
+.qc-tag--info { background:var(--ui-primary-soft); color:var(--ui-primary); }
 .qc-tag--green { background:#f0fdf4; color:#16a34a; }
 .qc-tag--orange { background:#fff7ed; color:#ea580c; }
-.role-item { padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; transition:all .15s; }
-.role-item:hover { border-color:#2563eb; background:#eff6ff; }
-.role-item--active { border-color:#2563eb; background:#eff6ff; }
+.role-item { padding:8px 10px; border:1px solid var(--ui-border); border-radius:8px; cursor:pointer; transition:all .15s; }
+.role-item:hover { border-color:var(--ui-primary); background:var(--ui-primary-soft); }
+.role-item--active { border-color:var(--ui-primary); background:var(--ui-primary-soft); }
 .role-clear { padding:6px; text-align:center; font-size:12px; color:#ef4444; cursor:pointer; }
 .process-collapse :deep(.n-collapse-item__header) { padding:10px !important; font-size:11.5px; color:#94a3b8; line-height:1.5; }
 .process-collapse :deep(.n-collapse-item__header:hover) { color:#64748b; }
@@ -4916,32 +5323,68 @@ div:hover > .role-clear-x { display:block; }
 .process-collapse :deep(.n-collapse .n-collapse-item) { margin-left:0 !important; }
 .process-collapse :deep(.thought-card) { margin:0 !important; }
 
-.chat-app { --canvas:#f7f8fa; --surface:#fff; --muted:#f1f4f8; --border:#e4e8ee; --text:#1d2733; --subtle:#6b7785; height:100vh; height:100dvh; display:flex; overflow:hidden; background:var(--canvas); color:var(--text); }
+.chat-app { --canvas:var(--ui-canvas); --surface:var(--ui-surface); --muted:var(--ui-surface-muted); --border:var(--ui-border); --text:var(--ui-text); --subtle:var(--ui-text-muted); height:100vh; height:100dvh; display:flex; overflow:hidden; background:var(--canvas); color:var(--text); }
 .sidebar { width:284px; flex:0 0 284px; height:100%; min-height:0; display:flex; flex-direction:column; padding:18px 14px 14px; background:var(--surface); border-right:1px solid var(--border); overflow:hidden; overflow-x:hidden; } .sidebar .brand-row,.sidebar .sidebar-nav,.sidebar .conversation-search,.sidebar .conversation-list,.sidebar .sidebar-footer { overflow-x:hidden; }
 .brand-row { display:flex; gap:10px; align-items:center; padding:0 10px 14px; } .brand-row strong { display:block; font-size:15px; } .brand-row span { display:block; margin-top:2px; color:var(--subtle); font-size:11px; } .sidebar-collapse-btn { margin-left:auto; } .sidebar-expand-btn { display:none; } .chat-app--collapsed .sidebar { width:0; flex:0 0 0; padding:0; overflow:hidden; border-right:0; } .mobile-menu { display:none; }
-.brand-mark,.welcome-symbol { display:grid; place-items:center; width:32px; height:32px; color:#fff; background:#1d2733; border-radius:8px; font-size:18px; }
+.brand-mark,.welcome-symbol { display:grid; place-items:center; width:32px; height:32px; color:var(--ui-surface); background:var(--ui-text); border-radius:8px; font-size:18px; }
 .new-conversation { justify-content:flex-start; margin-bottom:12px; } .conversation-search { padding:0 2px 6px; } .conversation-label { padding:0 10px 6px; color:var(--subtle); font-size:12px; } .conversation-empty { padding:14px 10px; color:var(--subtle); font-size:12px; text-align:center; } .conversation-group-empty { padding:8px 10px; color:var(--subtle); font-size:12px; } .delete-confirm-body { display:block; margin-top:2px; color:var(--subtle); font-size:12px; }
- .sidebar-nav { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; } .sidebar-nav-item { display:flex; align-items:center; gap:8px; padding:9px 10px; border:0; border-radius:8px; background:transparent; color:var(--text); font-size:14px; font-weight:500; text-align:left; cursor:pointer; } .sidebar-nav-item:hover { background:var(--muted); } .sidebar-nav-item .n-icon { font-size:17px; color:var(--subtle); } .sidebar-nav-item--active { background:var(--muted); font-weight:600; } .sidebar-nav-item--active .n-icon { color:var(--accent, #2563eb); } .sidebar-nav-item--primary { background:#2563eb; color:#fff; font-weight:600; } .sidebar-nav-item--primary:hover { background:#1d4ed8; } .sidebar-nav-item--primary .n-icon { color:#fff; }
-.conversation-list { display:flex; flex:1 1 0; min-height:0; flex-direction:column; gap:3px; overflow:hidden; overflow-y:auto; } .conversation-group { display:flex; flex-direction:column; min-height:0; } .conversation-group--normal { flex:0 0 auto; } .conversation-group--timers { flex:0 1 auto; } .conversation-group--collapsed { flex:0 0 auto; } .conversation-group-list { display:flex; flex-direction:column; gap:3px; min-height:0; } .conversation-group-list::-webkit-scrollbar { width:6px; } .conversation-group-list::-webkit-scrollbar-thumb { background:rgba(0,0,0,.18); border-radius:3px; } .conversation-group-list::-webkit-scrollbar-track { background:transparent; } .conversation-item { position:relative; min-height:54px; padding:9px 28px 9px 34px; overflow:hidden; color:var(--text); text-align:left; background:transparent; border:0; border-radius:7px; cursor:pointer; } .conversation-item:hover { background:var(--muted); } .conversation-item.active { background:#eaf1ff; color:#174cb9; }
-.conversation-icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); display:grid; place-items:center; color:var(--subtle); font-size:15px; } .conversation-item.active .conversation-icon { color:#174cb9; } .conversation-item--disabled { opacity:.45; } .conversation-item--disabled .conversation-icon { color:var(--subtle); } .conversation-item--disabled .conversation-title { text-decoration:line-through; }
+ .sidebar-nav { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; } .sidebar-management { padding-top:10px; border-top:1px solid var(--border); } .sidebar-management .sidebar-nav-item { width:100%; } .sidebar-nav-item { display:flex; align-items:center; gap:8px; padding:9px 10px; border:0; border-radius:8px; background:transparent; color:var(--text); font-size:14px; font-weight:500; text-align:left; cursor:pointer; } .sidebar-nav-item:hover { background:var(--muted); } .sidebar-nav-item .n-icon { font-size:17px; color:var(--subtle); } .sidebar-nav-item--active { background:var(--muted); font-weight:600; } .sidebar-nav-item--active .n-icon { color:var(--ui-primary); } .sidebar-nav-item--primary { background:var(--ui-primary); color:var(--ui-surface); font-weight:600; } .sidebar-nav-item--primary:hover { background:var(--ui-primary-hover); } .sidebar-nav-item--primary .n-icon { color:var(--ui-surface); }
+.conversation-list { display:flex; flex:1 1 0; min-height:0; flex-direction:column; gap:3px; overflow:hidden; overflow-y:auto; } .conversation-group { display:flex; flex-direction:column; min-height:0; } .conversation-group--normal { flex:0 0 auto; } .conversation-group--timers { flex:0 1 auto; } .conversation-group--collapsed { flex:0 0 auto; } .conversation-group-list { display:flex; flex-direction:column; gap:3px; min-height:0; } .conversation-group-list::-webkit-scrollbar { width:6px; } .conversation-group-list::-webkit-scrollbar-thumb { background:var(--ui-border-strong); border-radius:3px; } .conversation-group-list::-webkit-scrollbar-track { background:transparent; } .conversation-item { position:relative; min-height:54px; padding:9px 28px 9px 34px; overflow:hidden; color:var(--text); text-align:left; background:transparent; border:0; border-radius:7px; cursor:pointer; } .conversation-item:hover { background:var(--muted); } .conversation-item.active { background:var(--ui-primary-soft); color:var(--ui-primary); }
+.conversation-icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); display:grid; place-items:center; color:var(--subtle); font-size:15px; } .conversation-item.active .conversation-icon { color:var(--ui-primary); } .conversation-item--disabled { opacity:.45; } .conversation-item--disabled .conversation-icon { color:var(--subtle); } .conversation-item--disabled .conversation-title { text-decoration:line-through; }
 .conversation-title,.conversation-time { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .conversation-title { font-size:13px; } .conversation-time { margin-top:4px; color:var(--subtle); font-size:11px; } .conversation-line { display:flex; align-items:center; gap:6px; min-width:0; } .conversation-line .conversation-title { flex:0 1 auto; min-width:0; } .conversation-mode-tag { flex:0 0 auto; padding:0 6px; font-size:10px; line-height:1.7; color:#2563eb; background:rgba(37,99,235,.08); border-radius:5px; } .conversation-delete { position:absolute; right:8px; top:18px; display:none; color:var(--subtle); } .conversation-item:hover .conversation-delete { display:block; }
 .sidebar-footer { display:flex; gap:7px; align-items:center; padding:10px; color:var(--subtle); font-size:12px; } .connection-dot { width:7px; height:7px; border-radius:50%; background:#aab4c0; } .connection-dot.connected { background:#16805b; }
-.workspace { min-width:0; flex:1; display:flex; flex-direction:column; } .workspace-header { height:64px; flex:0 0 64px; display:flex; align-items:center; justify-content:space-between; padding:0 28px; background:rgba(255,255,255,.72); border-bottom:1px solid var(--border); } .header-title,.header-actions { display:flex; align-items:center; gap:8px; } .header-title h1 { max-width:440px; margin:0; overflow:hidden; font-size:15px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; } .header-title span { display:block; margin-top:3px; color:var(--subtle); font-size:11px; } .mobile-menu { display:none; } .locale-trigger .locale-short { margin-left:2px; font-size:13px; font-weight:600; color:var(--subtle); }
-.timeline-wrap { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; } .timeline { flex:1; overflow:auto; scroll-behavior:smooth; } .timeline::-webkit-scrollbar { width:6px; } .timeline::-webkit-scrollbar-thumb { background:rgba(0,0,0,.18); border-radius:3px; } .timeline::-webkit-scrollbar-track { background:transparent; } .scroll-bottom-btn { position:absolute; right:max(28px, calc((100% - 840px) / 2 + 28px)); bottom:28px; z-index:5; box-shadow:0 2px 10px rgba(29,39,51,.2); } .message-column,.composer-column { width:min(840px, calc(100% - 64px)); margin:0 auto; } .message-column { padding:32px 0 48px; } .welcome { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100%; padding:48px 24px 150px; text-align:center; } .welcome-symbol { width:44px; height:44px; margin-bottom:16px; font-size:23px; } .welcome h2 { margin:0 0 8px; font-size:20px; } .welcome p { max-width:360px; margin:0; color:var(--subtle); font-size:14px; line-height:1.7; } .workspace--initial .timeline-wrap { flex:0 0 auto; margin-top:auto; } .workspace--initial .composer-wrap { flex:0 0 auto; margin-bottom:auto; padding:0 0 24px; } .welcome--mode { min-height:0; padding:24px; } .welcome--mode .mode-tabs { display:flex; gap:10px; margin-bottom:18px; } .mode-tab { display:inline-flex; align-items:center; gap:6px; padding:8px 20px; border:1px solid var(--border); border-radius:999px; background:var(--surface); color:var(--text); font-size:14px; font-weight:500; cursor:pointer; transition:all .15s; } .mode-tab:hover { border-color:#b6c2d4; } .mode-tab.active { border-color:#2563eb; color:#2563eb; background:#eff6ff; } .mode-feats { display:flex; flex-direction:column; gap:5px; margin-top:16px; font-size:13px; color:var(--subtle); }
-.message { display:flex; gap:10px; margin-bottom:24px; } .message--user { flex-direction:row-reverse; } .message-body { min-width:0; max-width:calc(100% - 42px); } .message--user .message-body { display:flex; flex-direction:column; align-items:flex-end; width:fit-content; max-width:72%; } .message--assistant .message-body { background:#fff; border:1px solid #e6ebf2; border-radius:8px; padding:12px 14px; } .message-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; color:var(--subtle); font-size:12px; } .message-meta strong { color:var(--text); font-size:13px; } .message-bubble { border-radius:8px; } .user-bubble { max-width:100%; padding:11px 14px; background:#eaf1ff; } .user-bubble p { margin:0; white-space:pre-wrap; word-break:break-word; }
+.workspace { min-width:0; flex:1; display:flex; flex-direction:column; } .workspace-header { height:64px; flex:0 0 64px; display:flex; align-items:center; justify-content:space-between; padding:0 28px; background:var(--ui-overlay); border-bottom:1px solid var(--border); } .header-title,.header-actions { display:flex; align-items:center; gap:8px; } .header-title h1 { max-width:440px; margin:0; overflow:hidden; font-size:15px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; } .header-title span { display:block; margin-top:3px; color:var(--subtle); font-size:11px; } .mobile-menu { display:none; } .locale-trigger .locale-short { margin-left:2px; font-size:13px; font-weight:600; color:var(--subtle); }
+.timeline-wrap { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; } .timeline { flex:1; overflow:auto; scroll-behavior:smooth; } .timeline::-webkit-scrollbar { width:6px; } .timeline::-webkit-scrollbar-thumb { background:var(--ui-border-strong); border-radius:3px; } .timeline::-webkit-scrollbar-track { background:transparent; } .scroll-bottom-btn { position:absolute; right:max(28px, calc((100% - 840px) / 2 + 28px)); bottom:28px; z-index:5; box-shadow:0 2px 10px rgba(0,0,0,.2); } .message-column,.composer-column { width:min(840px, calc(100% - 64px)); margin:0 auto; } .message-column { padding:32px 0 48px; } .welcome { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100%; padding:48px 24px 150px; text-align:center; } .welcome-symbol { width:44px; height:44px; margin-bottom:16px; font-size:23px; } .welcome h2 { margin:0 0 8px; font-size:20px; } .welcome p { max-width:360px; margin:0; color:var(--subtle); font-size:14px; line-height:1.7; } .workspace--initial .timeline-wrap { flex:0 0 auto; margin-top:auto; } .workspace--initial .composer-wrap { flex:0 0 auto; margin-bottom:auto; padding:0 0 24px; } .welcome--mode { min-height:0; padding:24px; }
+.welcome--mode .mode-tabs { display:flex; gap:10px; margin-bottom:18px; } .mode-tab { display:inline-flex; align-items:center; gap:6px; padding:8px 20px; border:1px solid var(--border); border-radius:999px; background:var(--surface); color:var(--text); font-size:14px; font-weight:500; cursor:pointer; transition:all .15s; } .mode-tab:hover { border-color:var(--ui-border-strong); } .mode-tab.active { border-color:var(--ui-primary); color:var(--ui-primary); background:var(--ui-primary-soft); }
+.conversation-list,
+.conversation-group-list,
+.timeline {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-border-strong) transparent;
+}
+.conversation-list::-webkit-scrollbar,
+.conversation-group-list::-webkit-scrollbar,
+.timeline::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+}
+.conversation-list::-webkit-scrollbar-thumb,
+.conversation-group-list::-webkit-scrollbar-thumb,
+.timeline::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  background: var(--ui-border-strong);
+  border: 0;
+  border-radius: 999px;
+}
+.conversation-list::-webkit-scrollbar-track,
+.conversation-group-list::-webkit-scrollbar-track,
+.timeline::-webkit-scrollbar-track {
+  background: transparent;
+}
+.conversation-list::-webkit-scrollbar-button,
+.conversation-group-list::-webkit-scrollbar-button,
+.timeline::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.message { display:flex; gap:10px; margin-bottom:24px; } .message--user { flex-direction:row-reverse; } .message-body { min-width:0; max-width:calc(100% - 42px); } .message--user .message-body { display:flex; flex-direction:column; align-items:flex-end; width:fit-content; max-width:72%; } .message--assistant .message-body { background:var(--ui-surface); border:1px solid var(--ui-border); border-radius:8px; padding:12px 14px; } .message-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; color:var(--subtle); font-size:12px; } .message-meta strong { color:var(--text); font-size:13px; } .message-bubble { border-radius:8px; } .user-bubble { max-width:100%; padding:11px 14px; background:var(--ui-primary-soft); } .user-bubble p { margin:0; white-space:pre-wrap; word-break:break-word; }
 .assistant-content { margin-bottom:12px; } .message-status { display:inline-block; margin-top:10px; color:#b76a00; font-size:12px; }
-.message-actions { display:flex; gap:2px; align-items:center; margin-top:7px; } .message-actions--user { justify-content:flex-end; } .message-menu-wrap { position:relative; display:inline-flex; } .message-menu { position:absolute; right:0; bottom:calc(100% + 6px); z-index:60; display:flex; flex-direction:column; min-width:130px; padding:4px; background:#fff; border:1px solid #e4e8ee; border-radius:8px; box-shadow:0 4px 16px rgba(29,39,51,.12); } .message-menu-item { display:flex; gap:6px; align-items:center; padding:6px 10px; color:#1d2733; background:transparent; border:0; border-radius:6px; cursor:pointer; font-size:13px; } .message-menu-item:hover { background:#f1f4f8; }
-.attachment-list,.pending-attachments { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; } .attachment-chip { display:inline-flex; gap:5px; align-items:center; max-width:220px; padding:4px 8px; overflow:hidden; color:#34527e; background:#fff; border:1px solid #cbd8ed; border-radius:6px; font-size:12px; cursor:pointer; } .attachment-chip .attachment-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .attachment-chip button { flex-shrink:0; } .attachment-chip--image { max-width:260px; } .attachment-preview { width:34px; height:34px; flex:0 0 34px; object-fit:cover; border:1px solid #d8e1ef; border-radius:4px; } .attachment-chip button { padding:0; color:inherit; background:none; border:0; cursor:pointer; font-size:15px; }
+.message-actions { display:flex; gap:2px; align-items:center; margin-top:7px; } .message-actions--user { justify-content:flex-end; } .message-menu-wrap { position:relative; display:inline-flex; } .message-menu { position:absolute; right:0; bottom:calc(100% + 6px); z-index:60; display:flex; flex-direction:column; min-width:130px; padding:4px; background:var(--ui-surface-raised); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.2); } .message-menu-item { display:flex; gap:6px; align-items:center; padding:6px 10px; color:var(--ui-text); background:transparent; border:0; border-radius:6px; cursor:pointer; font-size:13px; } .message-menu-item:hover { background:var(--ui-surface-muted); }
+.attachment-list,.pending-attachments { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; } .attachment-chip { display:inline-flex; gap:5px; align-items:center; max-width:220px; padding:4px 8px; overflow:hidden; color:var(--ui-primary); background:var(--ui-surface); border:1px solid var(--ui-border-strong); border-radius:6px; font-size:12px; cursor:pointer; } .attachment-chip .attachment-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .attachment-chip button { flex-shrink:0; } .attachment-chip--image { max-width:260px; } .attachment-preview { width:34px; height:34px; flex:0 0 34px; object-fit:cover; border:1px solid var(--ui-border); border-radius:4px; } .attachment-chip button { padding:0; color:inherit; background:none; border:0; cursor:pointer; font-size:15px; }
 .process-collapse { margin-top:14px; background:var(--surface); border:1px solid var(--border); border-radius:8px; } .process-heading,.tool-heading { display:flex; gap:7px; align-items:center; min-width:0; } .process-heading { color:#405166; font-size:13px; } .process-heading small { color:var(--subtle); font-size:11px; } .plan-list { display:flex; flex-direction:column; gap:7px; padding:2px 0 10px; } .plan-item { display:flex; gap:8px; align-items:center; color:#405166; font-size:13px; } .plan-index { display:grid; place-items:center; width:19px; height:19px; color:#2563eb; background:#eaf1ff; border-radius:50%; font-size:11px; } .plan-item :deep(.n-tag) { margin-left:auto; } .detail-collapse { margin-top:8px; border:1px solid var(--border); border-radius:6px; } .analysis-text { padding:8px 0; color:#405166; line-height:1.65; white-space:pre-wrap; } .tool-heading span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .tool-heading :deep(.n-tag) { margin-left:auto; } .message-status { margin-top:10px; }
-.composer-wrap { flex:0 0 auto; padding:12px 0 20px; background:linear-gradient(0deg, var(--canvas) 82%, rgba(247,248,250,0)); } .task-error { margin-bottom:10px; } .pending-attachments { margin:0 0 8px; } .composer { position:relative; display:flex; flex-direction:column; gap:2px; padding:10px 12px 8px; background:var(--surface); border:1px solid var(--border); border-radius:20px; box-shadow:0 4px 14px rgba(29,39,51,.05); } .composer:focus-within { border-color:var(--border); box-shadow:0 4px 14px rgba(29,39,51,.05); } .composer--dragging { border-color:#2563eb; background:#f5f9ff; box-shadow:0 0 0 3px rgba(37,99,235,.16); } .composer-input :deep(.n-input) { --n-border: transparent; --n-box-shadow: none; --n-box-shadow-focus: none; --n-box-shadow-hover: none; --n-color: transparent; --n-color-focus: transparent; background:transparent !important; box-shadow:none !important; } .composer-input :deep(.n-input__border), .composer-input :deep(.n-input__state-border) { border:0 !important; box-shadow:none !important; display:none; } .composer-input :deep(textarea) { padding-top:8px; padding-bottom:4px; } .composer-toolbar { display:flex; align-items:center; justify-content:space-between; margin-top:2px; } .composer-toolbar-left { display:flex; align-items:center; gap:2px; } .composer-toolbar-right { display:flex; align-items:center; gap:6px; } .toolbar-pill { border-radius:10px; padding:0 10px; } .toolbar-pill--on { border-color:#2563eb; background:#eef4ff; color:#2563eb; } .composer-context { font-size:12px; color:var(--subtle); white-space:nowrap; } .composer-model { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--text); white-space:nowrap; cursor:pointer; padding:3px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); transition:border-color .15s ease, background .15s ease; } .composer-model:hover { border-color:#c3d0f5; background:#f5f7fc; } .model-picker { display:flex; flex-direction:column; gap:2px; min-width:200px; max-height:260px; overflow:auto; padding:4px 2px; } .model-picker-item { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:6px; font-size:12px; color:#374151; cursor:pointer; } .model-picker-item:hover { background:#f1f4f8; } .model-picker-item--active { color:#2563eb; font-weight:600; } .model-picker-check { width:12px; flex:0 0 12px; } .context-tooltip { display:flex; flex-direction:column; gap:8px; align-items:stretch; min-width:190px; padding:4px 2px; } .context-tooltip .ctx-tokens { font-size:12px; line-height:1.4; color:#4b5563; white-space:nowrap; } .context-tooltip .ctx-compact-btn { justify-content:center; width:100%; font-size:12px; } .context-tooltip .ctx-actions { display:flex; gap:6px; } .context-tooltip .ctx-actions .n-button { flex:1; font-size:12px; } .hidden-input { display:none; } .rename-menu { position:fixed; z-index:70; display:flex; flex-direction:column; min-width:130px; padding:4px; background:#fff; border:1px solid #e4e8ee; border-radius:8px; box-shadow:0 4px 16px rgba(29,39,51,.12); }
-.permission-card { width:min(520px, calc(100vw - 32px)); } .permission-code { max-height:260px; margin:0; padding:10px; overflow:auto; background:#f1f4f8; border:1px solid #e4e8ee; border-radius:6px; font:12px/1.55 "Cascadia Code",Consolas,monospace; } .permission-actions { display:flex; justify-content:flex-end; gap:8px; }
+.composer-wrap { flex:0 0 auto; padding:12px 0 20px; background:linear-gradient(0deg, var(--canvas) 82%, transparent); } .task-error { margin-bottom:10px; } .pending-attachments { margin:0 0 8px; } .composer { position:relative; display:flex; flex-direction:column; gap:2px; padding:10px 12px 8px; background:var(--surface); border:1px solid var(--border); border-radius:20px; box-shadow:0 4px 14px rgba(0,0,0,.12); } .composer:focus-within { border-color:var(--ui-border-strong); box-shadow:0 4px 14px rgba(0,0,0,.12); } .composer--dragging { border-color:var(--ui-primary); background:var(--ui-primary-soft); box-shadow:0 0 0 3px color-mix(in srgb, var(--ui-primary) 16%, transparent); } .composer-input :deep(.n-input) { --n-border: transparent; --n-box-shadow: none; --n-box-shadow-focus: none; --n-box-shadow-hover: none; --n-color: transparent; --n-color-focus: transparent; background:transparent !important; box-shadow:none !important; } .composer-input :deep(.n-input__border), .composer-input :deep(.n-input__state-border) { border:0 !important; box-shadow:none !important; display:none; } .composer-input :deep(textarea) { padding-top:8px; padding-bottom:4px; } .composer-toolbar { display:flex; align-items:center; justify-content:space-between; margin-top:2px; } .composer-toolbar-left { display:flex; align-items:center; gap:2px; } .composer-toolbar-right { display:flex; align-items:center; gap:6px; } .toolbar-pill { border-radius:10px; padding:0 10px; } .toolbar-pill--on { border-color:var(--ui-primary); background:var(--ui-primary-soft); color:var(--ui-primary); } .composer-context { font-size:12px; color:var(--subtle); white-space:nowrap; } .composer-model { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--text); white-space:nowrap; cursor:pointer; padding:3px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); transition:border-color .15s ease, background .15s ease; } .composer-model:hover { border-color:var(--ui-border-strong); background:var(--ui-surface-muted); } .model-picker { display:flex; flex-direction:column; gap:2px; min-width:200px; max-height:260px; overflow:auto; padding:4px 2px; } .model-picker-item { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:6px; font-size:12px; color:var(--ui-text-secondary); cursor:pointer; } .model-picker-item:hover { background:var(--ui-surface-muted); } .model-picker-item--active { color:var(--ui-primary); font-weight:600; } .model-picker-check { width:12px; flex:0 0 12px; } .context-tooltip { display:flex; flex-direction:column; gap:8px; align-items:stretch; min-width:190px; padding:4px 2px; } .context-tooltip .ctx-tokens { font-size:12px; line-height:1.4; color:var(--ui-text-secondary); white-space:nowrap; } .context-tooltip .ctx-compact-btn { justify-content:center; width:100%; font-size:12px; } .context-tooltip .ctx-actions { display:flex; gap:6px; } .context-tooltip .ctx-actions .n-button { flex:1; font-size:12px; } .hidden-input { display:none; } .rename-menu { position:fixed; z-index:70; display:flex; flex-direction:column; min-width:130px; padding:4px; background:var(--ui-surface-raised); border:1px solid var(--ui-border); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.2); }
+.permission-card { width:min(520px, calc(100vw - 32px)); } .permission-code { max-height:260px; margin:0; padding:10px; overflow:auto; background:var(--ui-surface-muted); border:1px solid var(--ui-border); border-radius:6px; font:12px/1.55 "Cascadia Code",Consolas,monospace; } .permission-actions { display:flex; justify-content:flex-end; gap:8px; }
 .hidden-action { display:inline-flex; }
 .agent-pill { max-width:130px; overflow:hidden; text-overflow:ellipsis; }
-.panel-placeholder { display:flex; flex-direction:column; align-items:center; gap:10px; padding:44px 10px; color:var(--subtle); font-size:13px; text-align:center; } .panel-placeholder .n-icon { font-size:22px; } .panel-section { display:flex; flex-direction:column; gap:6px; padding:4px 2px 14px; } .panel-section label { color:var(--subtle); font-size:12px; }
-.right-panel { display:none; flex:0 0 368px; width:368px; flex-direction:column; background:var(--surface); border-left:1px solid var(--border); } .right-panel--open { display:flex; } .right-panel-header { display:flex; align-items:center; justify-content:space-between; height:48px; padding:0 10px 0 16px; border-bottom:1px solid var(--border); } .right-panel-header strong { font-size:14px; } .right-panel-body { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
-.panel-search { position:sticky; top:0; z-index:2; background:var(--surface); padding-bottom:6px; }
-.panel-section-actions { display:flex; align-items:center; gap:8px; }
+.management-page { min-height:100%; }
+.panel-placeholder { display:flex; flex-direction:column; align-items:center; gap:10px; padding:44px 10px; color:var(--subtle); font-size:13px; text-align:center; } .panel-placeholder .n-icon { font-size:22px; } .panel-section { display:flex; flex-direction:column; gap:12px; padding:2px 2px 20px; } .panel-section label { color:var(--subtle); font-size:12px; }
+.panel-section-actions { display:flex; width:100%; align-items:center; gap:8px; }
 .panel-section-actions .panel-search-input { flex:1; }
+.resource-card-list { display:grid; width:100%; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); align-items:stretch; gap:16px; }
+.resource-card-list > .manage-card { min-width:0; }
+.resource-card-list--two-columns { grid-template-columns:repeat(2, minmax(0, 1fr)); }
 .manage-form-label { display:block; margin:8px 0 4px; color:var(--subtle); font-size:12px; }
 .timer-schedule-mode { margin:12px 0 2px; }
 .manage-form-row { display:flex; align-items:center; gap:8px; margin-top:14px; color:var(--subtle); font-size:13px; }
@@ -4968,7 +5411,7 @@ div:hover > .role-clear-x { display:block; }
 .timer-run--clickable:hover { background:#f2f6ff; }
 .timer-cron-invalid { color:#d03050; font-size:11px; font-weight:600; }
 .timer-next-run { color:var(--subtle); font-size:11px; }
-.conversation-group-label { display:flex; flex:0 0 auto; align-items:center; gap:4px; margin:10px 2px 2px; padding:6px 6px; width:100%; text-align:left; color:#111; font-size:14px; font-weight:700; letter-spacing:.3px; background:transparent; border:0; border-radius:6px; cursor:pointer; user-select:none; } .conversation-group-label:hover { background:var(--muted); } .conversation-group-count { margin-left:auto; font-size:11px; font-weight:600; color:var(--subtle); background:var(--surface); border:1px solid var(--border); border-radius:99px; padding:0 6px; line-height:16px; }
+.conversation-group-label { display:flex; flex:0 0 auto; align-items:center; gap:4px; margin:10px 2px 2px; padding:6px 6px; width:100%; text-align:left; color:var(--text); font-size:14px; font-weight:700; letter-spacing:.3px; background:transparent; border:0; border-radius:6px; cursor:pointer; user-select:none; } .conversation-group-label:hover { background:var(--muted); } .conversation-group-label .n-icon { color:var(--subtle); } .conversation-group-count { margin-left:auto; font-size:11px; font-weight:600; color:var(--subtle); background:var(--surface); border:1px solid var(--border); border-radius:99px; padding:0 6px; line-height:16px; }
 .help-body { padding:4px 2px; } .help-placeholder { margin:0; color:var(--subtle); font-size:13px; }
 .message--highlight { outline:2px solid #2563eb; outline-offset:2px; border-radius:10px; }
 .panel-section { display:flex; flex-direction:column; gap:10px; }
@@ -4979,19 +5422,25 @@ div:hover > .role-clear-x { display:block; }
 .panel-group-head--mcp { margin-top:6px; padding-top:8px; border-top:1px dashed var(--border); }
 .panel-group-label { font-size:12px; font-weight:600; color:var(--text); }
 .panel-group-count { font-size:10px; color:var(--subtle); background:var(--canvas); border:1px solid var(--border); border-radius:99px; padding:0 6px; line-height:16px; }
-.manage-card { border:1px solid var(--border); border-radius:10px; padding:10px 12px; background:var(--canvas); display:flex; flex-direction:column; gap:6px; transition:box-shadow .15s ease; }
+.manage-card { position:relative; border:1px solid var(--border); border-radius:10px; padding:10px 12px; background:var(--canvas); display:flex; flex-direction:column; gap:6px; transition:box-shadow .15s ease; }
 .manage-card:hover { box-shadow:0 2px 8px rgba(29,39,51,.06); }
+.manage-card--actionable > .manage-card-head { padding-right:52px; }
 .manage-card--disabled { opacity:.55; } .manage-card--active { border-color:#2563eb; box-shadow:0 0 0 1px rgba(37,99,235,.35); background:rgba(37,99,235,.06); } .manage-card--clickable { cursor:pointer; }
 .manage-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .manage-card-head-right { display:flex; align-items:center; gap:8px; }
 .timer-run-badge { font-size:12px; color:var(--subtle); white-space:nowrap; }
 .manage-card-title-btn { display:inline-flex; min-width:0; padding:0; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; } .manage-card-title-btn:hover .manage-card-title { color:#2563eb; } .manage-card-title-btn--active .manage-card-title { color:#2563eb; } .manage-card-title-btn:disabled { cursor:default; }
 .manage-card-title { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.manage-title-with-icon { display:inline-flex; min-width:0; align-items:center; gap:6px; }
+.manage-title-with-icon .n-icon { flex:0 0 auto; color:var(--ui-primary); font-size:15px; }
 .manage-card-desc { font-size:12px; color:var(--subtle); margin:0; line-height:1.5; word-break:break-word; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .manage-card-cmd { display:block; font-size:11px; color:var(--subtle); background:var(--surface); border-radius:6px; padding:4px 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .manage-card-chips { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
 .manage-chip-label { font-size:11px; color:var(--subtle); margin-right:2px; }
 .manage-card-actions { display:flex; justify-content:flex-end; gap:2px; }
+.manage-card-actions--overlay { position:absolute; z-index:1; top:6px; right:6px; opacity:0; pointer-events:none; transition:opacity .15s ease; }
+.manage-card:hover > .manage-card-actions--overlay,
+.manage-card:focus-within > .manage-card-actions--overlay { opacity:1; pointer-events:auto; }
 .knowledge-alert { margin-bottom:8px; }
 .knowledge-alert-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .panel-section--knowledge { position:relative; padding-bottom:44px; }
@@ -5000,13 +5449,12 @@ div:hover > .role-clear-x { display:block; }
 .tool-group-left { display:flex; align-items:center; gap:6px; min-width:0; }
 .tool-group-caret { font-size:12px; color:var(--subtle); width:14px; text-align:center; flex:0 0 auto; }
 .tool-count { font-size:10px; color:var(--subtle); background:var(--surface); border-radius:99px; padding:0 6px; line-height:16px; flex:0 0 auto; }
-.tool-item-list { display:flex; flex-direction:column; gap:6px; border-left:2px solid var(--border); margin:2px 0 2px 10px; padding:2px 0 2px 10px; }
+.tool-item-list { display:flex; max-height:200px; flex-direction:column; gap:6px; overflow-y:auto; border-left:2px solid var(--border); margin:2px 0 2px 10px; padding:2px 6px 2px 10px; }
 .tool-item { padding:6px 8px; border-radius:8px; background:var(--surface); display:flex; flex-direction:column; gap:4px; }
 .tool-item--disabled { opacity:.55; }
 .tool-item-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .tool-item-head code { font-size:12px; color:var(--primary, inherit); }
 .tool-item-desc { font-size:11px; color:var(--subtle); margin:0; line-height:1.5; word-break:break-word; max-height:3em; overflow:hidden; }
-.agent-current { font-size:10px; color:#2563eb; border:1px solid rgba(37,99,235,.4); border-radius:99px; padding:1px 7px; }
 .manage-modal { width:min(520px, calc(100vw - 32px)); }
 .manage-modal--wide { width:min(80vw, 1200px); }
 .manage-modal--large { width:min(85vw, 1400px); height:min(85vh, 920px); display:flex; flex-direction:column; }
@@ -5016,16 +5464,38 @@ div:hover > .role-clear-x { display:block; }
 .manage-form-left { display:flex; flex-direction:column; gap:10px; min-width:0; }
 .manage-form-left :deep(.n-input--textarea) { flex:1; }
 .manage-form-left :deep(.n-input--textarea .n-input__textarea-el) { height:100% !important; }
-.manage-form-right { display:flex; flex-direction:column; gap:12px; min-width:0; }
-.manage-form-field { display:flex; flex-direction:column; flex:1; min-height:0; }
-.manage-form-field .manage-form-label { margin:0 0 4px; }
-.manage-form-field .n-transfer { flex:1; height:auto; min-height:0; }
+.manage-form-right { display:flex; flex-direction:column; gap:12px; min-width:0; overflow-y:auto; padding-right:4px; }
+.agent-association-section { display:flex; flex-direction:column; gap:8px; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--canvas); }
+.agent-association-section .manage-form-label { margin:0; color:var(--text); font-weight:600; }
+.agent-checkbox-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:8px 14px; }
+.agent-checkbox-list--tools { grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); }
+.agent-association-empty { padding:8px 0; color:var(--subtle); font-size:12px; }
+.agent-tool-tree-node { display:flex; flex-direction:column; gap:8px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
+.agent-tool-tree-row { display:flex; min-height:38px; align-items:center; justify-content:space-between; gap:10px; padding:6px 10px; }
+.agent-tool-tree-toggle { display:flex; min-width:0; flex:1; align-items:center; gap:7px; padding:0; color:var(--text); background:transparent; border:0; cursor:pointer; text-align:left; }
+.agent-tool-tree-toggle .n-icon:first-child { color:var(--subtle); font-size:14px; }
+.agent-tool-tree-toggle .n-icon:nth-child(2) { color:var(--ui-primary); font-size:16px; }
+.agent-tool-tree-toggle strong { overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.agent-tool-tree-count { min-width:22px; padding:0 6px; color:var(--subtle); background:var(--canvas); border:1px solid var(--border); border-radius:99px; font-size:10px; line-height:18px; text-align:center; }
+.agent-tool-tree-children { padding:0 12px 12px 36px; }
+.agent-mcp-server-list { display:flex; flex-direction:column; gap:8px; padding:0 10px 10px 30px; }
+.agent-tool-server { display:flex; flex-direction:column; gap:8px; border-left:1px solid var(--border); }
+.agent-tool-server > .agent-tool-tree-row { padding-right:0; }
+.agent-tool-children { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:8px 14px; margin-left:18px; padding:0 0 10px 24px; border-left:1px solid var(--border); }
+.agent-tool-label,.agent-knowledge-label { display:flex; min-width:0; flex-direction:column; gap:2px; }
+.agent-tool-label code { overflow:hidden; font-size:12px; text-overflow:ellipsis; }
+.agent-tool-label small,.agent-knowledge-label small { color:var(--subtle); font-size:11px; line-height:1.35; }
+.agent-association-section :deep(.n-checkbox) { align-items:flex-start; }
 .manage-form-code :deep(textarea) { font-family:"Cascadia Code",Consolas,monospace; font-size:12px; line-height:1.6; }
 .manage-form-actions { display:flex; justify-content:flex-end; gap:8px; }
+.quick-command-form-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
+.quick-command-form-grid .manage-form-row { justify-content:space-between; }
+.role-editor-layout { display:grid; height:calc(80vh - 180px); grid-template-columns:repeat(2, minmax(0, 1fr)); gap:12px; }
+.role-editor-column { display:flex; min-width:0; min-height:0; flex-direction:column; }
+.role-editor-textarea { width:100%; min-height:0; flex:1; resize:none; padding:10px; color:var(--text); background:var(--canvas); border:1px solid var(--border); border-radius:8px; font:13px/1.6 inherit; }
+.role-editor-preview { min-height:0; flex:1; overflow-y:auto; padding:10px; background:var(--canvas); border:1px solid var(--border); border-radius:8px; }
 .agent-option-name { display:flex; align-items:center; gap:14px; font-size:13px; }
 .agent-option-icon { font-size:15px; color:var(--accent, #2563eb); margin-right:4px; }
-.manage-modal--large :deep(.n-transfer-list) { height:100%; }
-.manage-modal--large :deep(.n-transfer-list-body) { height:calc(100% - 38px); }
 .quick-action-panel { position:absolute; bottom:calc(100% + 8px); left:0; right:0; z-index:30; max-height:220px; overflow-y:auto; padding:4px; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(29,39,51,.12); display:flex; flex-direction:column; gap:2px; }
 .quick-action-item { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; font-size:13px; cursor:pointer; color:var(--text); }
 .quick-action-item:hover, .quick-action-item--active { background:rgba(37,99,235,.08); }
@@ -5054,7 +5524,10 @@ div:hover > .role-clear-x { display:block; }
 .edit-card { width:70vw; } .rename-card { width:min(400px, calc(100vw - 32px)); } .edit-body { display:flex; gap:16px; align-items:stretch; } .edit-input { flex:1 1 50%; min-width:0; } .edit-input :deep(textarea) { font-family:"Cascadia Code",Consolas,monospace; font-size:13px; line-height:1.6; } .edit-preview { flex:1 1 50%; min-width:0; display:flex; flex-direction:column; } .edit-preview-label { margin-bottom:6px; color:var(--subtle); font-size:12px; } .edit-preview-body { flex:1; padding:12px 14px; background:var(--canvas); border:1px solid var(--border); border-radius:8px; overflow:auto; } .edit-preview-body :deep(p) { margin:0 0 8px; } .edit-preview-body :deep(p:last-child) { margin-bottom:0; }.drawer-list { display:flex; flex-direction:column; gap:8px; } .drawer-item { justify-content:flex-start; padding:10px; }
 @media (min-width: 721px) { .chat-app--collapsed .sidebar-expand-btn { display:inline-flex; } }
 @media (max-width: 720px) { .sidebar { display:none; } .mobile-menu { display:inline-flex; } .composer-toolbar .toolbar-pill { padding:0 6px; } .composer-toolbar .toolbar-pill :deep(.n-button__content) { display:none; } .composer-toolbar .agent-pill { max-width:none; } }
-@media (max-width: 900px) { .right-panel { display:none; } .workspace-header { padding:0 14px; } .message-column,.composer-column { width:calc(100% - 32px); } .message-column { padding-top:22px; } .message--user .message-body { max-width:86%; } }
+@media (max-width: 900px) { .workspace-header { padding:0 14px; } .message-column,.composer-column { width:calc(100% - 32px); } .message-column { padding-top:22px; } .message--user .message-body { max-width:86%; } }
+@media (max-width: 900px) { .manage-modal--large { width:100vw; height:100vh; height:100dvh; } .manage-form-split { grid-template-columns:1fr; height:auto; } .manage-form-left :deep(.n-input--textarea) { min-height:280px; } .manage-form-right { overflow:visible; } }
+@media (max-width: 560px) { .resource-card-list,.resource-card-list--two-columns { grid-template-columns:1fr; } .panel-section-actions { align-items:stretch; flex-direction:column; } .panel-section-actions .n-button { align-self:flex-end; } .quick-command-form-grid,.role-editor-layout { grid-template-columns:1fr; } }
+@media (hover: none) { .manage-card-actions--overlay { opacity:1; pointer-events:auto; } }
 /* animated loading dots under a running assistant message */
 .msg-loader {
   --color-1: #9aa3b2;

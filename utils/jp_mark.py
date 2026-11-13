@@ -63,12 +63,7 @@ def _load_jp_mark_ruby():
 
 
 def _extract_jp_spans(text: str) -> list[tuple[int, int]]:
-    """Return (start, end) spans of kana-bearing Japanese segments.
-
-    Spans are extended to adjacent kanji, but rejected if the kana ratio is
-    too low (i.e. the span is mostly Chinese characters that happen to be
-    adjacent to a stray kana).
-    """
+    """Return (start, end) spans of kana-bearing Japanese segments."""
     spans: list[tuple[int, int]] = []
     n = len(text)
     i = 0
@@ -80,12 +75,7 @@ def _extract_jp_spans(text: str) -> list[tuple[int, int]]:
             e = i + 1
             while e < n and _SEG_CHAR_RE.match(text[e]):
                 e += 1
-            # Reject spans that are mostly CJK (Chinese text with a stray kana).
-            # Require at least ~20% kana density to consider it Japanese.
-            seg = text[s:e]
-            kana_count = len(_KANA_RE.findall(seg))
-            if len(seg) > 0 and kana_count / len(seg) >= 0.15:
-                spans.append((s, e))
+            spans.append((s, e))
             i = e
         else:
             i += 1
@@ -106,9 +96,7 @@ def jp_mark_text(text: str) -> dict:
     out: list[str] = []
     prev = 0
     for s, e in spans:
-        # Non-Japanese parts: keep as-is (markdown-it on the frontend will render
-        # markdown like **bold**, lists, etc.). Only Japanese spans get ruby HTML.
-        out.append(text[prev:s])
+        out.append(html_mod.escape(text[prev:s]))
         segment = text[s:e]
         marked = fn(segment)
         if isinstance(marked, str) and marked.startswith("Error:"):
@@ -116,5 +104,5 @@ def jp_mark_text(text: str) -> dict:
         else:
             out.append(str(marked))
         prev = e
-    out.append(text[prev:])
+    out.append(html_mod.escape(text[prev:]))
     return {"has_jp": True, "html": "".join(out)}

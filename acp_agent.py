@@ -19,6 +19,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from deepagents_acp.server import AgentServerACP, AgentSessionContext
 # reasoning deltas are dropped and the frontend sees a frozen screen during
 # thinking. Wrap it to also emit AgentThoughtChunk for reasoning_content.
 import deepagents_acp.server as _da_server  # noqa: E402
+from langchain.agents import create_agent 
 
 _orig_content_updates = _da_server._content_updates
 
@@ -108,9 +110,20 @@ from utils.session_context import (  # noqa: E402  (imported after env/DB setup,
     rollback_last_turn as sc_rollback_last_turn,
     save_context as sc_save_context,
 )
-from utils.model_util import create_model
+from utils.model_util import create_model, current_model_name
 from utils.mcp_loader import close_mcp_clients, get_agent_mcp_tools, get_agent_subagents_config
 from utils.skill_loader import get_agent_skills
+from utils.statistics_context import (
+    TurnMetrics,
+    activate_metrics,
+    reset_metrics,
+    statistics_callback_handler,
+)
+from utils.statistics_store import (
+    finish_record as statistics_finish_record,
+    start_record as statistics_start_record,
+    statistics_enabled,
+)
 from api.todos import create_todo as _todos_create
 from api.todos import get_todo as _todos_get
 from api.todos import update_todo as _todos_update
@@ -120,7 +133,7 @@ logger = logging.getLogger("acp_agent")
 
 # Selected agent (passed by the gateway as AGENT_NAME env var; the frontend
 # sends it through the /acp-ws?agent= query param). Its enabled MCP tools are
-# loaded from .deepagents/agents/agents.json and attached in build_agent().
+# loaded from the selected .deepagents/agents/*.agent.md document.
 AGENT_NAME = os.getenv("AGENT_NAME", "default").strip() or "default"
 
 # conversation state persistence file: checkpoints are saved (sqlite),
@@ -130,6 +143,24 @@ AGENT_NAME = os.getenv("AGENT_NAME", "default").strip() or "default"
 DB_ROOT = os.getenv("DB_ROOT") if os.getenv("DB_ROOT") else "./db"
 os.makedirs(DB_ROOT, exist_ok=True)
 DB_PATH = os.path.join(DB_ROOT, "agent_state.sqlite")
+
+
+def _prompt_text(prompt: Any) -> str:
+    if isinstance(prompt, str):
+        return prompt.strip()
+    if not isinstance(prompt, list):
+        return str(prompt or "").strip()
+    texts: list[str] = []
+    for block in prompt:
+        if isinstance(block, dict):
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                texts.append(block["text"])
+            continue
+        if getattr(block, "type", None) == "text":
+            text = getattr(block, "text", "")
+            if isinstance(text, str):
+                texts.append(text)
+    return "\n\n".join(texts).strip()
 
 
 # SYSTEM_PROMPT = (
@@ -158,6 +189,26 @@ def _load_agent_md(agent_name: str) -> str:
         if end != -1:
             content = content[end + 3:].lstrip("\n")
     return content.strip()
+
+
+def _knowledge_scope_prompt(agent_name: str) -> str:
+    """Describe the exact knowledge bases this Agent may query."""
+    try:
+        from utils.agent_registry import load_agents_config
+
+        knowledge = load_agents_config().get(agent_name, {}).get("knowledge") or []
+    except (OSError, ValueError):
+        return ""
+    ids = [item for item in knowledge if isinstance(item, str) and item]
+    if not ids:
+        return ""
+    rows = "\n".join(f"- {db_id}" for db_id in ids)
+    return (
+        "# Associated knowledge bases\n"
+        "Use retrieve_knowledge only with the following database IDs. "
+        "Do not query unassociated knowledge bases.\n"
+        f"{rows}"
+    )
 
 
 def get_system_prompt(agent_name: str | None = None) -> str:
@@ -198,9 +249,13 @@ def get_system_prompt(agent_name: str | None = None) -> str:
         )
     name = (agent_name or os.getenv("AGENT_NAME", "") or "default").strip() or "default"
     agent_md = _load_agent_md(name)
+    parts = [base_prompt]
     if agent_md:
-        return f"{base_prompt}\n\n# Agent Descriptions\n{agent_md}"
-    return base_prompt
+        parts.append(f"# Agent Descriptions\n{agent_md}")
+    knowledge_scope = _knowledge_scope_prompt(name)
+    if knowledge_scope:
+        parts.append(knowledge_scope)
+    return "\n\n".join(parts)
 
 SYSTEM_PROMPT = get_system_prompt()
 
@@ -216,7 +271,7 @@ def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_
     (api/context.py) so both show exactly what the model receives.
     """
     parts = [get_system_prompt(agent_name)]
-    if web_search and (agent_name or "") == "Chat":
+    if web_search:
         parts.append(
             "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
             "先用 search_web 工具搜索（中文问题用中文关键词）。"
@@ -237,6 +292,47 @@ def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_
     if user_preset:
         out += f"\n\n# User preset\n{user_preset}"
     return out
+
+
+def _web_search_tools() -> list:
+    """Load the shared search tool used by the composer web-search toggle."""
+    try:
+        from utils.mcp_loader import _holder, make_tool, load_agents_config
+
+        cfg = load_agents_config()
+        browser_entry = next(
+            (
+                entry
+                for entry in (
+                    cfg.get("default", {}).get("tools", {}).get("mcp_tools") or []
+                )
+                if entry.get("server") == "browser_server"
+            ),
+            None,
+        )
+        if not browser_entry:
+            return []
+        selected = {
+            item if isinstance(item, str) else item.get("name")
+            for item in browser_entry.get("tools") or []
+        }
+        manifest_path = (
+            Path(".deepagents")
+            / "tools"
+            / "mcp_servers"
+            / "browser_server"
+            / "manifest.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        holder = _holder("browser_server")
+        return [
+            make_tool(holder, tool_meta)
+            for tool_meta in manifest.get("tools") or []
+            if tool_meta.get("name") == "search_web" and "search_web" in selected
+        ]
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("web_search inject failed: %s", exc)
+        return []
 
 
 class PowerShellBackend(LocalShellBackend):
@@ -372,6 +468,8 @@ def _todo_tools() -> list[StructuredTool]:
         ),
     ]
 
+from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware 
+
 
 def build_agent(
     context: AgentSessionContext, checkpointer=None, agent_name: str | None = None
@@ -389,51 +487,20 @@ def build_agent(
     # the raw argument (e.g. None != "Chat") would wrongly route Chat sessions
     # into the full workspace branch and leak all default skills/todo tools.
     resolved = (agent_name or os.getenv("AGENT_NAME", "") or "default").strip() or "default"
+    web_search_enabled = os.getenv("WEB_SEARCH", "").strip() == "1"
+    agent_tools = get_agent_mcp_tools(resolved)
 
     if resolved == "Chat":
         # Chat-only agent: no MCP tools / subagents / skills — a lightweight
         # conversational model with no local file or shell access.
         chat_backend = StateBackend()
-        chat_tools = []
-        role_prompt = os.getenv("ROLE_PROMPT", "").strip()
-        role_name = ""
-        # Resolve role_name from the role file content — we don't have the name
-        # here, but build_system_prompt reads it fresh. For now use env.
+        chat_tools = _web_search_tools() if web_search_enabled else []  
         chat_system_prompt = build_system_prompt(
             "Chat",
             role_name=os.getenv("ROLE_NAME", ""),
-            web_search=os.getenv("WEB_SEARCH", "").strip() == "1",
+            web_search=web_search_enabled,
         )
-        # Optional web search (toggled from the composer): inject the
-        # Load browser_server's search_web tool and instruct the model to search first.
-        if os.getenv("WEB_SEARCH", "").strip() == "1":
-            try:
-                from utils.mcp_loader import _holder, make_tool, load_agents_config
-                cfg = load_agents_config()
-                bs_entry = next(
-                    (e for e in (cfg.get("default", {}).get("tools", {}).get("mcp_tools") or []) if e.get("server") == "browser_server"),
-                    None,
-                )
-                if bs_entry:
-                    holder = _holder("browser_server")
-                    for tm in bs_entry.get("tools") or []:
-                        if tm.get("name") == "search_web":
-                            chat_tools.append(make_tool(holder, tm))
-                    chat_system_prompt += (
-                        "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
-                        "先用 search_web 工具把问题转成关键词搜索（中文问题用中文关键词），"
-                        "阅读搜索结果后再回答；如果结果不够，换关键词或换 engine=baidu 再搜一次。"
-                        "回答时引用来源 URL。\n\n"
-                    )
-            except Exception as e:  # noqa: BLE001
-                import logging
-                logging.getLogger(__name__).warning("web_search inject failed: %s", e)
-        # Persist the actual system prompt used so /api/context/current can show it.
-        try:
-            from pathlib import Path as _P
-            (_P(".deepagents") / ".current_system_prompt.txt").write_text(chat_system_prompt, encoding="utf-8")
-        except Exception:
-            pass
+
         agent = create_deep_agent(
             model=create_model(),
             tools=chat_tools,
@@ -441,9 +508,14 @@ def build_agent(
             skills=[],
             checkpointer=checkpointer,
             backend=chat_backend,
-            system_prompt=chat_system_prompt,
+            system_prompt=chat_system_prompt,  
+            middleware=[  
+                _ToolExclusionMiddleware(excluded=frozenset({  
+                    "ls", "read_file", "write_file", "edit_file",  
+                    "delete", "glob", "grep", "execute", "task",  
+                })),  
+            ],  
         )
-        return agent
 
     agent_name = resolved
     agent_root_dir = getattr(context, "cwd", None) or "."
@@ -474,7 +546,7 @@ def build_agent(
             "/conversation_history/": ephemeral_backend,
         },
     )
-    # Build subagents from agents.json "subagents" field
+    # Build subagents from the Agent document's subagent references.
     subagents: list[SubAgent] = []
     for sa_cfg in get_agent_subagents_config(agent_name):
         sa_name = sa_cfg.get("name")
@@ -495,13 +567,13 @@ def build_agent(
 
     agent = create_deep_agent(
         model=create_model(),
-        # MCP tools configured for the selected agent (agents.json -> mcp_tools);
+        # MCP tools configured in the selected Agent document;
         # each tool is a langchain StructuredTool backed by a fastmcp stdio client.
         # Todo tools (create_todo/update_todo/get_todo) are appended as builtin
         # task-step checklist tools (state in db/todos/).
-        tools=[*get_agent_mcp_tools(agent_name), *_todo_tools()],
+        tools=[*agent_tools, *_todo_tools()],
         subagents=subagents or None,
-        # Skills enabled for the selected agent (agents.json -> skills; the
+        # Skills enabled for the selected Agent document (the
         # default agent starts with every installed skill).
         skills=get_agent_skills(agent_name),
         # persistent checkpointer (AsyncSqliteSaver): session state saved to agent_state.sqlite,
@@ -512,8 +584,10 @@ def build_agent(
         # on the real Windows filesystem. Tell the model its actual working
         # directory so ls/read_file/glob resolve relative paths correctly
         # instead of guessing a drive root.
-        system_prompt=(
-            f"{get_system_prompt(agent_name)}"
+        system_prompt=build_system_prompt(
+            agent_name,
+            role_name=os.getenv("ROLE_NAME", ""),
+            web_search=web_search_enabled,
         ),
         # Trigger HITL interrupt before risky tool calls -> deepagents_acp converts it to ACP
         # session/request_permission -> frontend shows permission prompt (allow / deny / always allow)
@@ -594,6 +668,14 @@ class RollbackAgentServer(CompactingAgentServer):
         # where AGENT_NAME is fixed per subprocess).
         self._session_agents: dict[str, str] = {}
 
+    def _session_config(self, session_id: str):
+        config = dict(super()._session_config(session_id))
+        callbacks = list(config.get("callbacks") or [])
+        if statistics_callback_handler not in callbacks:
+            callbacks.append(statistics_callback_handler)
+        config["callbacks"] = callbacks
+        return config
+
     def _reset_agent(self, session_id: str) -> None:
         """Reset the agent instance, re-creating it from the factory if applicable.
 
@@ -620,6 +702,74 @@ class RollbackAgentServer(CompactingAgentServer):
         self._agent_session_id = session_id
 
     async def prompt(self, prompt, session_id, message_id=None, **kwargs):
+        mode = os.getenv("RUN_MODE", "").strip().lower()
+        if not statistics_enabled() or mode not in {"chat", "task"}:
+            return await self._run_prompt(
+                prompt, session_id=session_id, message_id=message_id, **kwargs
+            )
+
+        record_id = ""
+        metrics: TurnMetrics | None = None
+        metrics_token = None
+        started = time.perf_counter()
+        status = "failed"
+        error_type: str | None = None
+        try:
+            raw_question = kwargs.get("question")
+            question = (
+                raw_question.strip()
+                if isinstance(raw_question, str)
+                else _prompt_text(prompt)
+            )
+            record_id, _ = statistics_start_record(
+                session_id=str(session_id),
+                mode=mode,
+                agent_name=os.getenv("AGENT_NAME", "default").strip() or "default",
+                role_name=os.getenv("ROLE_NAME", "").strip(),
+                model_name=current_model_name(),
+                question=question,
+                conversation_id=str(kwargs.get("conversation_id") or "").strip() or None,
+                is_retry=bool(kwargs.get("retry")),
+            )
+            metrics = TurnMetrics(record_id)
+            metrics_token = activate_metrics(metrics)
+        except Exception:
+            logger.exception("[statistics] failed to start record")
+
+        try:
+            result = await self._run_prompt(
+                prompt, session_id=session_id, message_id=message_id, **kwargs
+            )
+            status = (
+                "cancelled"
+                if getattr(result, "stop_reason", None) == "cancelled"
+                else "completed"
+            )
+            return result
+        except asyncio.CancelledError:
+            status = "cancelled"
+            error_type = "CancelledError"
+            raise
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            if metrics_token is not None:
+                reset_metrics(metrics_token)
+            if record_id:
+                try:
+                    statistics_finish_record(
+                        record_id,
+                        status=status,
+                        duration_ms=round((time.perf_counter() - started) * 1000),
+                        ai_call_count=metrics.ai_call_count if metrics else 0,
+                        tool_call_count=metrics.tool_call_count if metrics else 0,
+                        error_type=error_type,
+                    )
+                except Exception:
+                    logger.exception("[statistics] failed to finish record %s", record_id)
+
+    async def _run_prompt(self, prompt, session_id, message_id=None, **kwargs):
         # history_on (client-sent _meta.history_on, default True):
         #   True  ->  re-seed the checkpoint with the full table history (现状);
         #   False ->  re-seed with an empty list, so the model only sees this
