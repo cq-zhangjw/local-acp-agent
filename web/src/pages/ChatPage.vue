@@ -341,7 +341,11 @@ const actionLabels = computed(() => ({
       : ['Default agent by default, switchable', 'Tools / skills / knowledge base available', 'Best for complex tasks & files']),
   builtinTools: locale.value === 'zh' ? '内置工具' : locale.value === 'ja' ? '内蔵ツール' : 'Built-in tools',
   context: locale.value === 'zh' ? '上下文' : locale.value === 'ja' ? 'コンテキスト' : 'Context',
-  contextTooltip: locale.value === 'zh' ? '当前会话上下文用量（本地估算）' : locale.value === 'ja' ? '現在のセッションのコンテキスト使用量（ローカル推定）' : 'Current session context usage (local estimate)',
+  contextTooltip: locale.value === 'zh' ? '当前会话用量（消息 + 系统提示词、技能和工具）' : locale.value === 'ja' ? '現在のセッション使用量（メッセージ + システムプロンプト、スキル、ツール）' : 'Current session usage (messages + system prompt, skills, and tools)',
+  contextSystemPrompt: locale.value === 'zh' ? '系统提示词' : locale.value === 'ja' ? 'システムプロンプト' : 'System prompt',
+  contextSkills: locale.value === 'zh' ? '技能' : locale.value === 'ja' ? 'スキル' : 'Skills',
+  contextTools: locale.value === 'zh' ? '工具' : locale.value === 'ja' ? 'ツール' : 'Tools',
+  contextMessages: locale.value === 'zh' ? '消息内容' : locale.value === 'ja' ? 'メッセージ' : 'Messages',
   compactContext: locale.value === 'zh' ? '压缩上下文' : locale.value === 'ja' ? 'コンテキストを圧縮' : 'Compact context',
   viewContext: locale.value === 'zh' ? '查看上下文' : locale.value === 'ja' ? 'コンテキストを表示' : 'View context',
   thinking: locale.value === 'zh' ? '思考中' : locale.value === 'ja' ? '考え中' : 'Thinking',
@@ -973,38 +977,36 @@ function exportConversation() {
 }
 
 
-// After a manual compaction the backend reports the real post-compaction
-// usage; show that instead of the (unchanged) local message estimate until
-// the next user message resets it.
-const contextOverride = ref<{ tokens: number; pct: number; total: number } | null>(null)
+type ContextCategory = 'system_prompt' | 'skills' | 'tools' | 'messages'
+type ContextCategoryBreakdown = Record<ContextCategory | 'total', { tokens: number; pct: number }>
+type ContextUsage = {
+  tokens: number
+  pct: number
+  total: number
+  categories: ContextCategoryBreakdown | null
+}
+
+const contextOverride = ref<ContextUsage | null>(null)
+const contextCategoryLabels = computed(() => ({
+  system_prompt: actionLabels.value.contextSystemPrompt,
+  skills: actionLabels.value.contextSkills,
+  tools: actionLabels.value.contextTools,
+  messages: actionLabels.value.contextMessages,
+}))
+const contextCategoryOrder: ContextCategory[] = ['system_prompt', 'skills', 'tools', 'messages']
 
 const contextUsage = computed(() => {
   const conversation = currentConversation.value
   if (!conversation || !conversation.messages.length || !contextSize.value) return null
-  if (contextOverride.value) return contextOverride.value
-  let chars = 0
-  for (const item of conversation.messages) {
-    if (item.role === 'user') {
-      chars += item.text.length
-    } else {
-      chars += (item.finalText ?? '').length
-      chars += (item.process?.toolCalls ?? []).reduce((sum, tool) => sum + (tool.input ?? '').length + (tool.output ?? '').length, 0)
-    }
-  }
-  const tokens = Math.max(1, Math.round(chars / 1.7))
-  const pct = Math.min(100, Math.round((tokens / contextSize.value) * 100))
-  return { pct, tokens, total: contextSize.value }
+  return contextOverride.value
 })
 
 const compactingContext = ref(false)
 
-// Fetch the real model-side context usage from the backend checkpoint.
-// The local estimate is computed from the full history, which compaction
-// never touches, so after an auto/manual compaction only the backend knows
-// the true post-compaction numbers.
-// Throttled context refresh during streaming: the backend recomputes
-// tokens on each request, but hitting it on every chunk is wasteful.
+// The backend is the source of truth for message and overhead token estimates.
+// Throttle refreshes during streaming because each request recomputes usage.
 let _ctxRefreshTimer: number | undefined
+let contextUsageRequestId = 0
 function scheduleContextRefresh() {
   if (_ctxRefreshTimer) return
   _ctxRefreshTimer = window.setTimeout(() => {
@@ -1015,23 +1017,35 @@ function scheduleContextRefresh() {
 
 async function refreshContextUsage() {
   const conversation = currentConversation.value
-  if (!conversation) return
+  if (!conversation || !conversation.messages.length) return
+  const requestId = ++contextUsageRequestId
+  const params = new URLSearchParams({
+    sessionId: conversation.agentSessionId ?? conversation.id,
+    agent: currentAgentName.value || 'default',
+    role: systemOverrideName.value,
+    web_search: String(webSearchOn.value),
+    model: currentModel.value,
+  })
   try {
-    const res = await fetch(
-      `/api/context/usage?sessionId=${encodeURIComponent(conversation.agentSessionId ?? conversation.id)}`
-      + `&agent=${encodeURIComponent(currentAgentName.value || 'default')}`
-    )
-    if (!res.ok) return
+    const res = await fetch(`/api/context/usage?${params}`)
+    if (!res.ok) {
+      console.error(`Context usage request failed: HTTP ${res.status}`)
+      return
+    }
     const data = await res.json()
+    if (requestId !== contextUsageRequestId || currentConversation.value?.id !== conversation.id) return
     if (data.ok && contextSize.value) {
       contextOverride.value = {
         tokens: Number(data.tokens) || 0,
         pct: Number(data.pct) ?? 0,
         total: Number(data.total) || contextSize.value,
+        categories: data.categories ?? null,
       }
+    } else {
+      console.error('Context usage request returned an error:', data.error ?? 'unknown error')
     }
-  } catch {
-    // backend unavailable: keep the local estimate
+  } catch (error) {
+    console.error('Context usage request failed:', error)
   }
 }
 
@@ -1046,6 +1060,9 @@ async function compactContext() {
       body: JSON.stringify({
         sessionId: conversation.agentSessionId ?? conversation.id,
         agent: currentAgentName.value || 'default',
+        role: systemOverrideName.value,
+        web_search: webSearchOn.value,
+        model: currentModel.value,
       }),
     })
     const data = await res.json()
@@ -1054,6 +1071,7 @@ async function compactContext() {
         tokens: Number(data.after_tokens) || 0,
         pct: Number(data.pct_after) ?? 0,
         total: contextSize.value,
+        categories: data.after_categories ?? null,
       }
       if (data.summary) {
         ;message.success(`${actionLabels.value.compactDone}（${data.pct_before}% → ${data.pct_after}%）`)
@@ -1075,8 +1093,16 @@ function viewContext() {
   const conversation = currentConversation.value
   if (!conversation) return
   const sid = conversation.agentSessionId ?? conversation.id
-  const roleParam = systemOverrideName.value ? `&role=${encodeURIComponent(systemOverrideName.value)}` : ''
-  const url = `/api/context/current?sessionId=${encodeURIComponent(sid)}&format=html${roleParam}`
+  const params = new URLSearchParams({
+    sessionId: sid,
+    agent: currentAgentName.value || 'default',
+    format: 'html',
+    role: systemOverrideName.value,
+    web_search: String(webSearchOn.value),
+    model: currentModel.value,
+    lang: locale.value,
+  })
+  const url = `/api/context/current?${params}`
   window.open(url, '_blank', 'width=1200,height=800,noopener=true')
 }
 
@@ -3036,7 +3062,7 @@ async function submitPrompt() {
 
   const isNewConversation = conversation.messages.length === 0
   errorText.value = ''
-  contextOverride.value = null // a new prompt resets to the local estimate
+  contextOverride.value = null // refresh the backend estimate for the new prompt
   const resources = [...attachments.value]
   // Persist only the lightweight view (no base64 / raw File); file_id/url/path
   // are back-filled by sendAgentPrompt once the uploads complete.
@@ -3883,6 +3909,13 @@ watch(() => currentMessages.value.length, () => {
 watch(() => currentConversation.value?.messages, (messages) => {
   if (messages) syncTodoState(currentConversation.value)
 }, { deep: true })
+watch(
+  [currentAgentName, systemOverrideName, webSearchOn, currentModel],
+  () => {
+    contextOverride.value = null
+    void refreshContextUsage()
+  },
+)
 onBeforeUnmount(() => {
   window.removeEventListener('click', closeMessageMenu)
   window.removeEventListener('click', closeRenameMenu)
@@ -4383,6 +4416,12 @@ onBeforeUnmount(() => {
                   </template>
                   <div class="context-tooltip">
                     <span class="ctx-tokens">{{ contextUsage.tokens }} / {{ contextUsage.total }} tokens</span>
+                    <div v-if="contextUsage.categories" class="ctx-breakdown">
+                      <div v-for="category in contextCategoryOrder" :key="category" class="ctx-breakdown-row">
+                        <span>{{ contextCategoryLabels[category] }}</span>
+                        <span>{{ contextUsage.categories[category].tokens }} tokens · {{ contextUsage.categories[category].pct }}%</span>
+                      </div>
+                    </div>
                     <div class="ctx-actions">
                       <NButton size="tiny" @click="viewContext">{{ actionLabels.viewContext }}</NButton>
                       <NButton size="tiny" type="primary" :disabled="isRunning || compactingContext" :loading="compactingContext" @click="compactContext">
@@ -5623,5 +5662,22 @@ div:hover > .role-clear-x { display:block; }
 .load-earlier:hover {
   background: var(--border);
   color: var(--text);
+}
+.context-tooltip .ctx-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 0;
+  border-top: 1px solid var(--ui-border);
+  border-bottom: 1px solid var(--ui-border);
+}
+.context-tooltip .ctx-breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 </style>

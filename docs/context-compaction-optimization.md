@@ -166,9 +166,13 @@
 - **任务锚点（最早的用户消息）永不删除**；
 - 旧 summary 消息被新 summary 完整继承，不重复保留。
 
-### 7.4 fail-safe
+### 7.4 fail-safe 与已知风险
 
-`_summarize()` 返回空（异常 / 空输出 / 模型不可用）→ `compact_messages_list()` 返回 `ok=False, reason="summary_failed"` 且**原样返回原消息列表**；三个调用点（`CompactingAgentServer`、`RollbackAgentServer`、`api/context.py::_compact`）都只在 `ok=True` 时写回。绝不因摘要失败丢历史。
+- 如果 `_summarize()` 整体返回空（例如所有分块都失败或模型不可用），`compact_messages_list()` 返回 `ok=False`，调用方保留原消息。
+- **部分分块失败目前不是 fail-safe**：单个 chunk 异常会被跳过；只要其他 chunk 成功，剩余摘要仍可能被当作成功结果写回，而所有 early 原文都会被移除。极端情况下会丢失失败 chunk 中的信息。
+- 摘要 prompt 要求保留路径、数值和待办，但这只是对模型的指令，不是无损保证；超预算合并也可能压缩细节。
+
+因此，在修复“任一分块失败则整次压缩失败并保留原文”前，不应将该流程描述为绝对不丢历史。高风险任务建议先用 `dryRun=true` 检查摘要。
 
 ### 7.5 token 估算的边界处理（多模态）
 
@@ -178,17 +182,34 @@
 - 图片按 `CONTEXT_IMAGE_TOKENS`（默认 750 tokens/张）单独计入 `estimate_tokens()`；
 - `estimate_text_tokens()` 收到非字符串不再抛 `TypeError`（此前会直接让整条压缩链路报错）。
 
-### 7.6 配置项（`.env`，见 `.env.bak` 模板）
+### 7.6 配置项与触发口径
+
+自动压缩的触发条件是：
+
+```text
+estimate_tokens(messages) + CONTEXT_COMPACT_OVERHEAD
+    >= CONTENT_SIZE * CONTEXT_COMPACT_RATIO
+```
+
+`RATIO` 决定何时开始检查压缩，不是压缩后保留的比例，也不是摘要长度。以当前两个模型的 `CONTENT_SIZE=262144`、`.env` 中的 `RATIO=0.75` 为例，触发线为 `196608`；固定 overhead 为 `6000` 时，消息估算达到约 `190608` 会触发。触发后还必须有可压缩的 early turns，且其 token 数达到 `MIN_GAIN`，才会实际生成摘要。
+
+当前压缩器在模块加载时读取一次模型窗口和这些环境变量。默认值来自代码；运行配置以进程环境和项目 `.env` 为准，`.env.bak` 只是备份，不代表运行时配置。
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `CONTEXT_COMPACT_RATIO` | 0.85 | 阈值 = `CONTENT_SIZE * RATIO` |
-| `CONTEXT_COMPACT_OVERHEAD` | 6000 | system prompt / 工具 schema 等不体现在消息文本里的开销 |
-| `CONTEXT_COMPACT_SUMMARY_MAX_TOKENS` | 3072 | 摘要输出上限 |
-| `CONTEXT_COMPACT_KEEP_TURNS` | 6 | 原样保留最近 N 轮（旧名 `CONTEXT_COMPACT_KEEP_RECENT` 仍兼容，语义已变为"轮"） |
-| `CONTEXT_COMPACT_MIN_GAIN` | 800 | 收益门限：early 部分小于此 token 数则不压缩 |
-| `CONTEXT_IMAGE_TOKENS` | 750 | 每张图片的估算 token |
-| `CONTEXT_COMPACT_SUMMARY_INPUT_FRACTION` | 0.6 | 单次摘要输入的窗口占比上限 |
+| `CONTEXT_COMPACT_RATIO` | 0.80 | 触发比例；当前 `.env` 为 `0.75` |
+| `CONTEXT_COMPACT_OVERHEAD` | 6000 | 固定额外开销估算；目前不随 Agent / 角色 / 工具实时变化 |
+| `CONTEXT_COMPACT_SUMMARY_MAX_TOKENS` | 3072 | 每个摘要 chunk 的提示词长度目标；当前只是 prompt 指令，不是模型 API 的硬输出上限 |
+| `CONTEXT_COMPACT_KEEP_TURNS` | 6 | 尽量原样保留最近 N 轮；旧名 `CONTEXT_COMPACT_KEEP_RECENT` 仍兼容 |
+| `CONTEXT_COMPACT_MIN_GAIN` | 800 | early 部分低于此估算 token 数时跳过压缩 |
+| `CONTEXT_IMAGE_TOKENS` | 750 | 每张图片的估算 token；由消息估算器单独计入 |
+| `CONTEXT_COMPACT_SUMMARY_INPUT_FRACTION` | 0.6 | 摘要输入分块大小系数，不是摘要输出比例 |
+| `CONTEXT_COMPACT_KEEP_TOKENS_RATIO` | 0.5 | 最近保留部分的 token 上限比例；当前 `.env` 未设置，使用代码默认值 |
+| `CONTEXT_COMPACT_SUMMARY_BUDGET_RATIO` | 0.05 | 长期 + 近期摘要的预算比例；262144 窗口下约为 13107 tokens，当前 `.env` 未设置 |
+
+`SUMMARY_MAX_TOKENS` 是每个分块的目标；多个分块的摘要可累积到 `SUMMARY_BUDGET_TOKENS`。超过预算时会调用 `_merge_layers()`，但其“不丢条目”及长度要求同样只是 prompt 指令，不能视为硬保证。摘要长度不要求与整个上下文窗口成比例：近期轮次仍保留原文，只有早期部分被摘要。
+
+`CONTEXT_COMPACT_OVERHEAD` 目前是固定值。上下文调试接口会另行估算实际 system prompt、skills 和工具 schema；该动态结果与压缩器使用的固定 6000 不一定相同。后续若要统一，应以当前 Agent 的实际 prompt / 工具 schema 估算，并保留额外安全余量，避免把估算值误当成精确 tokenizer 计数。
 
 ---
 
@@ -196,18 +217,22 @@
 
 ### 8.1 `GET /api/context/current`
 
-返回**下一次 prompt 真正喂给模型**的上下文（不含 system prompt / 工具 schema，那部分由 overhead 统一估算）。
+返回下一次请求的上下文消息，并在 overhead 中估算 system prompt、skills 和实际装配的工具 schema。
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `sessionId` | 必填 | ACP thread_id |
-| `agent` | `default` | 仅用于回显 |
+| `agent` | `default` | 选择 Agent 以构造 prompt 和实际工具清单 |
 | `format` | `json` | `html` 渲染为浏览器可读页面 |
 | `maxChars` | 500 | 每条消息预览字符数；`0` = 全文 |
+| `role` | 空 | 当前角色预设 |
+| `web_search` | `false` | 当前联网搜索开关 |
+| `model` | 空 | 选择上下文窗口大小 |
+| `lang` | `en` | HTML 界面语言：`zh` / `ja` / `en` |
 
-JSON 字段：`config`（active_config）、`plan`（next_compaction_plan：是否触发/将删多少条多少 token/保留多少）、`summary`（long/recent/tokens）、`stats`（message_count/chars/tokens/content_size/pct）、`messages[]`（index/type/is_summary/chars/tokens/tool_calls/id/**will_drop_next_compaction**/text/truncated）。
+JSON 字段：`config`（active_config）、`plan`（next_compaction_plan：是否触发/将删多少条多少 token/保留多少）、`summary`（long/recent/tokens）、`stats`（总 tokens 与百分比、system prompt / skills / tools / messages 分类 tokens 与百分比）、`overhead`（prompt 和工具 schema 估算）、`messages[]`（index/type/is_summary/chars/tokens/tool_calls/id/**will_drop_next_compaction**/text/truncated）。
 
-HTML 页面：用量、消息数、压缩阈值、下次压缩、摘要用量五个卡片 + 长期/近期双栏摘要面板 + 消息表（**红底 = 下次压缩会删除，蓝底 = 摘要消息**，粘性表头，70vh 滚动）。
+HTML 页面：总用量以及 system prompt / skills / tools / messages 各自 tokens 和上下文窗口占比、消息数、压缩阈值、下次压缩和摘要用量 + 长期/近期双栏摘要面板 + 实际工具 schema 和消息表；界面支持中文、日文和英文。
 
 浏览器直接用：`http://127.0.0.1:8000/api/context/current?sessionId=<id>&format=html`
 （本地无需鉴权；`&maxChars=0` 看全文）
@@ -215,10 +240,10 @@ HTML 页面：用量、消息数、压缩阈值、下次压缩、摘要用量五
 ### 8.2 `POST /api/context/compact` + `dryRun`
 
 ```json
-{"sessionId": "<id>", "agent": "default", "dryRun": true}
+{"sessionId": "<id>", "agent": "default", "role": "", "web_search": false, "model": "", "dryRun": true}
 ```
 
-- `dryRun=true`：**不写表**，返回 if 压缩后的 `before_tokens/after_tokens/pct_before/pct_after/removed/kept`、完整 `summary`（前 4000 字符）与 `after_messages[]`（type/is_summary/tokens/text），用于调 prompt；
+- `dryRun=true`：**不写表**，返回消息与 overhead 合并后的 `before_tokens/after_tokens/pct_before/pct_after`、`after_categories`、完整 `summary`（前 4000 字符）与 `after_messages[]`（type/is_summary/tokens/text），用于调 prompt；
 - `dryRun` 会绕过 `MIN_COMPACT_GAIN`（`min_gain=0`），便于在小会话上强制预览。
 
 ---

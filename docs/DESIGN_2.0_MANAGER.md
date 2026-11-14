@@ -1,7 +1,7 @@
 # DeepAgents 2.0 · 技能 / 工具（MCP）/ Agent 管理面板设计
 
 > 状态：已实施（2026-10-09，含后续调整：面板移除“新建技能/新建工具”表单，改为内置 skill-creator / tool-creator 技能由 AI 对话生成；Agent 迁入 `.deepagents/agents/` 目录（`*.agent.md` + `agents.json`）；工具面板顶部展示内置工具一览；技能编辑弹窗改为左右布局（左编辑右预览）；输入框 `@`/`/` 快捷动作已实现；工具面板按 MCP server 分组折叠展示、组内工具可单独启停；工具目录迁移至 `.deepagents/tools/mcp_servers/`；**工具启停改为 per-agent 记录于 agents.json 的 `tools` 字段（inner_tools + mcp_tools），内置工具 chips 可点击启停，根目录 tools.json 方案废弃**）
-> 状态追加（2026-10-11，v2.0 定型）：① 技能/工具面板**移除删除与试连功能**（后期统一做 skills/tools 管理页面，单个 Agent 面板只保留启停与编辑）；② Agent 不做模型覆盖表单（模型/提示词统一由 agents.json 管控，`acp_agent` 装配逻辑由用户后续调整）；③ 当前 Agent 通过**工具栏 Agent 下拉**选择（非面板“设为当前”按钮），下拉选项带图标、Agent 名首字母大写显示，选中后输入框追加 `` `@Agent名` ``，新建会话自动重置为 `default`；④ `acp_agent.py` 的 `build_agent` 已按 agents.json 实现 MCP 工具（`tools.mcp_tools`，工具名 `mcp_<server>_<tool>`）与技能装配（per-agent 启用集目录 `.enabled/<agent>/`）——本章 6.4/7 中与此冲突的描述以追加状态为准。
+> 状态追加（2026-10-11，v2.0 定型）：① 技能/工具面板**移除删除与试连功能**（后期统一做 skills/tools 管理页面，单个 Agent 面板只保留启停与编辑）；② Agent 不做模型覆盖表单（模型/提示词统一由 agents.json 管控）；③ 当前 Agent 通过**工具栏 Agent 下拉**选择（非面板“设为当前”按钮），下拉选项带图标、Agent 名首字母大写显示，选中后输入框追加 `` `@Agent名` ``，新建会话自动重置为 `default`；④ Chat 与 task 共用 `build_agent`，按当前 `*.agent.md` 的 YAML frontmatter 装配 skills、subagents 与工具，不生成 `.enabled/<agent>/` 启用集。
 > 适用范围：`E:\my_projects\deepagents_acp`（Windows / FastAPI 网关 + ACP 子进程 + Vue3 前端）
 > 关联：DESIGN_ZH.md（系统总设计）、UI_DESIGN.md（界面设计）
 
@@ -233,7 +233,7 @@ Agent 拥有专属目录 `.deepagents/agents/`：
 
 ### 5.1 数据契约（面板产出，装配侧消费）
 
-- `.deepagents/skills/<name>/SKILL.md`：标准技能格式（frontmatter + markdown 正文），装配侧可用 deepagents `SkillsMiddleware(sources=[...])` 直接加载（deepagents 0.7.19 已验证支持 `skills=` 参数）。
+- `.deepagents/skills/<name>/SKILL.md`：标准技能格式（frontmatter + markdown 正文）；装配侧扫描共享技能根目录，并依据 Agent `*.agent.md` frontmatter 的 `skills` 名称筛选，无需复制或物化启用集目录。
 - `.deepagents/tools/mcp_servers/<name>/manifest.json`：工具清单（serverInfo + tools），**已启用工具以 per-agent 形式记录在 `agents.json` 的 `tools.mcp_tools`**（每个条目含 server / serverInfo / 用户选定的 tools 子集）；装配侧按 Agent 读取其 `tools` 字段即可获得该 Agent 的启用工具集。
 - `.deepagents/tools/mcp_servers/<name>/server.json`：可选 MCP stdio 启动参数（command/args/cwd/env），装配侧可用官方 `mcp` SDK `stdio_client` 启动并 `list_tools()` 收集工具。
 - `.deepagents/agents.json`：Agent 全局定义（对象映射，见 3.3），装配侧据此覆盖模型 / 提示词 / 关联技能与工具。
@@ -245,7 +245,7 @@ Agent 拥有专属目录 `.deepagents/agents/`：
 | 扫描/列出/启停/删除/新建/编辑 `.deepagents/*` 资源 | 面板（`/api/manage` + 前端）——本次实施 |
 | 按 agent.json 构造模型（init_chat_model 覆盖） | 装配侧（用户后续） |
 | MCP 工具加载与注入 `create_deep_agent(tools=...)` | 装配侧（用户后续） |
-| SkillsMiddleware 注入 `create_deep_agent(skills=...)` | 装配侧（用户后续） |
+| Agent frontmatter 技能、子 Agent、工具 allowlist 装配 | `build_agent` 已实现；不物化 `.enabled` 目录 |
 | 会话发起时携带当前 Agent 名 | 前端发送消息时携带（本次实施，字段见 6.4） |
 
 ---
@@ -307,7 +307,7 @@ zh/ja/en 三语（`web/src/locales/*.ts` 新增 `manager` section）：skills/to
 
 | 文件 | 改动 |
 |---|---|
-| `.deepagents/skills\|tools/mcp_servers/` 骨架 + `.deepagents/agents/agents.json` | 目录骨架 + agents.json 含示例（default Agent）；Agent 定义支持 `*.agent.md`（装配时物化启用集目录 `.enabled/<agent>/`） |
+| `.deepagents/skills\|tools/mcp_servers/` 骨架 + `.deepagents/agents/` | 技能资源使用标准 `SKILL.md`；Agent 定义支持 `*.agent.md`，技能关联从其 frontmatter 读取并按名称筛选 |
 | `api/manage/manager.py` | 4. 的 API 全部实现 + 路径安全校验 + 文件读写 + `list_files(q, dir)` 子目录 |
 | `app.py` | 挂载 `/api/manage` 子路由（不涉及 ACP 子进程参数改动） |
 | `requirements.txt` | 追加 `mcp`（英文注释；用于 MCP 服务器 stdio 装配） |

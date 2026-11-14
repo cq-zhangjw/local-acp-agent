@@ -452,8 +452,7 @@ async def acp_bridge(websocket: WebSocket):
     if model_name:
         agent_env["MODEL_NAME"] = model_name
     web_search = websocket.query_params.get("web_search", "") or ""
-    if web_search:
-        agent_env["WEB_SEARCH"] = web_search
+    agent_env["WEB_SEARCH"] = "1" if web_search == "1" else "0"
     role_name = websocket.query_params.get("role", "") or ""
     if role_name:
         agent_env["ROLE_NAME"] = role_name

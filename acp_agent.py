@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import aiosqlite
 from acp import run_agent
@@ -86,7 +86,7 @@ def _convert_delta_with_reasoning(_dict, default_class):
 
 _loc_openai_base._convert_delta_to_message_chunk = _convert_delta_with_reasoning
 from langchain_core.messages import HumanMessage, RemoveMessage, convert_to_messages
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.graph.state import CompiledStateGraph
@@ -98,11 +98,20 @@ from langgraph.graph.state import CompiledStateGraph
 # references the middleware by module-global name, so patching this attribute
 # is enough to cover the main agent, subagents and the default GP subagent.
 import deepagents.graph as _deepagents_graph
-from utils.override.filesystem import FilesystemMiddleware as _OverrideFilesystemMiddleware
+from utils.override.filesystem import (
+    FilesystemMiddleware as _OverrideFilesystemMiddleware,
+    FsToolName,
+)
 
 _deepagents_graph.FilesystemMiddleware = _OverrideFilesystemMiddleware
 
-from deepagents.middleware.subagents import SubAgent
+from deepagents.middleware.subagents import (
+    TASK_TOOL_DESCRIPTION,
+    SubAgent,
+    TaskToolSchema,
+    _describe_subagent_for_tool,
+    _is_forked_subagent,
+)
 from utils.context_compactor import compact_messages, compact_messages_list, estimate_tokens, should_compact
 from utils.session_context import (  # noqa: E402  (imported after env/DB setup, matches module layout)
     get_context as sc_get_context,
@@ -111,8 +120,14 @@ from utils.session_context import (  # noqa: E402  (imported after env/DB setup,
     save_context as sc_save_context,
 )
 from utils.model_util import create_model, current_model_name
-from utils.mcp_loader import close_mcp_clients, get_agent_mcp_tools, get_agent_subagents_config
-from utils.skill_loader import get_agent_skills
+from utils.mcp_loader import (
+    close_mcp_clients,
+    get_agent_mcp_tools,
+    get_agent_subagents_config,
+    get_mcp_tool,
+)
+from utils.agent_registry import load_agents_config
+from utils.skill_loader import get_agent_skill_metadata
 from utils.statistics_context import (
     TurnMetrics,
     activate_metrics,
@@ -217,47 +232,49 @@ def get_system_prompt(agent_name: str | None = None) -> str:
     `agent_name` selects `.deepagents/agents/<name>.agent.md` (per-task agent in the
     timer engine); when omitted it falls back to the startup `AGENT_NAME` env var.
 
-    The `Chat` agent is special: it is a pure conversational persona, so it
-    never inherits the task-oriented AGENTS.md base (tool / todo instructions
-    would leak into casual replies). Only `chat.agent.md` is used.
+    Chat uses its own Agent document and does not inherit the workspace
+    AGENTS.md instructions.
     """
-    if (agent_name or "").strip() == "Chat":
-        agent_md = _load_agent_md("Chat")
-        if agent_md:
-            return agent_md
-        return (
-            "You are a warm and patient chat assistant. Keep replies concise "
-            "and friendly; use emoji to express feelings; never use tools."
-        )
-    if os.path.exists("./AGENTS.md"):
-        with open("./AGENTS.md", "r", encoding="utf-8") as f:
-            base_prompt = f.read()
-    else:
-        base_prompt = (
-            "You are an intelligent task agent.\n"
-            "1. For task requests, before acting: call create_todo to break the task "
-            "into concrete steps. Then execute step by step; after each step, call "
-            "update_todo to mark it completed (or blocked with a reason). When all "
-            "steps are done, summarize the results in your final reply.\n"
-            "2. When essential information is missing, proactively ask the user (request_input); do not fabricate.\n"
-            "3. Image attachments are provided as image content; analyze them directly, do not call read_file. "
-            "Other attachments are provided as virtual paths (e.g. /uploads/example.txt); "
-            "read them with local file tools, do not treat them as http resources or Windows paths.\n"
-            "4. Request permission (request_permission) before high-risk tool operations.\n"
-            "5. Always report back to the user when the whole task is finished.\n"
-            "Always respond in the user's language."
-        )
+    system_prompt = "No global rules."
     name = (agent_name or os.getenv("AGENT_NAME", "") or "default").strip() or "default"
+    if name.lower() != "chat" and os.path.exists("./AGENTS.md"):
+        with open("./AGENTS.md", "r", encoding="utf-8") as f:
+            system_prompt = f.read()
+
+
     agent_md = _load_agent_md(name)
-    parts = [base_prompt]
-    if agent_md:
-        parts.append(f"# Agent Descriptions\n{agent_md}")
-    knowledge_scope = _knowledge_scope_prompt(name)
-    if knowledge_scope:
-        parts.append(knowledge_scope)
-    return "\n\n".join(parts)
+    knowledge_scope = _knowledge_scope_prompt(name) or "No associated knowledge bases."
+    system_prompt = f"""
+# Global rules
+{system_prompt}
+
+# Current Agent description
+{agent_md}
+
+# Available knowledge bases
+{knowledge_scope}
+
+"""
+    return system_prompt
 
 SYSTEM_PROMPT = get_system_prompt()
+
+
+def _agent_skills_prompt(agent_name: str | None) -> str:
+    skills = get_agent_skill_metadata(agent_name or "")
+    if not skills:
+        return "No skills are enabled for this Agent."
+
+    return (
+        "The following skills are enabled for this Agent:\n"
+        + "\n".join(
+            f"- {skill['name']}\n"
+            f"  - skill_path: {skill['skill_path']}\n"
+            f"  - description: {skill['description']}"
+            for skill in skills
+        )
+        + "\nUse `read_file` to read the relevant `skill_path` before applying a skill."
+    )
 
 
 def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_search: bool = False) -> str:
@@ -269,70 +286,49 @@ def build_system_prompt(agent_name: str | None = None, role_name: str = "", web_
 
     Shared by the agent startup (acp_agent.py) and the context debug view
     (api/context.py) so both show exactly what the model receives.
-    """
-    parts = [get_system_prompt(agent_name)]
-    if web_search:
-        parts.append(
-            "联网搜索已开启。当用户问题需要最新信息、新闻、数据或你不确定答案时，"
-            "先用 search_web 工具搜索（中文问题用中文关键词）。"
-            "可以一次传 queries 数组搜多个独立维度。"
-            "每轮对话最多搜索 10 次；如果搜不到相关信息，直接告诉用户，"
-            "然后根据你自身的知识回答，不要无止境换词搜索。"
-            "回答时引用来源 URL。"
-        )
-    global_rules = "\n\n".join(parts)
 
-    user_preset = ""
+    `web_search` should be true only when this turn enables search and the
+    search tool has been injected into the Agent's tool list.
+    """
+    system_prompt = get_system_prompt(agent_name)
+
+    web_search_prompt = (
+        "Web search is disabled. Do not call "
+        "`mcp_browser_server_search_web`."
+    )
+    if web_search:
+        web_search_prompt = """
+Web search is enabled.
+- Use `mcp_browser_server_search_web` when the user asks for current information, news, recent data, or when you are uncertain about the answer. Search using keywords in the user's language.
+- You may pass a `queries` array to search multiple independent angles in one call.
+- Make no more than 10 searches per conversation.
+- If you cannot find relevant information, say so and answer from your own knowledge; do not keep trying endless query variations.
+- Cite source URLs in your answer.
+"""
+
+    skills_prompt = _agent_skills_prompt(agent_name)
+
+    user_preset = "No role preset."
     if role_name:
         role_file = Path(".deepagents") / "roles" / f"{role_name}.md"
         if role_file.exists():
             user_preset = role_file.read_text(encoding="utf-8").strip()
 
-    out = f"# Global rules\n{global_rules}"
-    if user_preset:
-        out += f"\n\n# User preset\n{user_preset}"
-    return out
+    system_prompt = f"""
+{system_prompt}
 
+# Web search rules
+{web_search_prompt}
 
-def _web_search_tools() -> list:
-    """Load the shared search tool used by the composer web-search toggle."""
-    try:
-        from utils.mcp_loader import _holder, make_tool, load_agents_config
+# Available Skills
+{skills_prompt}
 
-        cfg = load_agents_config()
-        browser_entry = next(
-            (
-                entry
-                for entry in (
-                    cfg.get("default", {}).get("tools", {}).get("mcp_tools") or []
-                )
-                if entry.get("server") == "browser_server"
-            ),
-            None,
-        )
-        if not browser_entry:
-            return []
-        selected = {
-            item if isinstance(item, str) else item.get("name")
-            for item in browser_entry.get("tools") or []
-        }
-        manifest_path = (
-            Path(".deepagents")
-            / "tools"
-            / "mcp_servers"
-            / "browser_server"
-            / "manifest.json"
-        )
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        holder = _holder("browser_server")
-        return [
-            make_tool(holder, tool_meta)
-            for tool_meta in manifest.get("tools") or []
-            if tool_meta.get("name") == "search_web" and "search_web" in selected
-        ]
-    except Exception as exc:  # noqa: BLE001
-        logging.getLogger(__name__).warning("web_search inject failed: %s", exc)
-        return []
+# User preset
+{user_preset}
+
+"""
+
+    return system_prompt
 
 
 class PowerShellBackend(LocalShellBackend):
@@ -471,73 +467,86 @@ def _todo_tools() -> list[StructuredTool]:
 from deepagents.middleware._tool_exclusion import _ToolExclusionMiddleware 
 
 
-def build_agent(
-    context: AgentSessionContext, checkpointer=None, agent_name: str | None = None
-) -> CompiledStateGraph:
-    """Agent factory: build a DeepAgent from the session context (each session has independent state and working directory).
+_FILESYSTEM_TOOL_NAMES: tuple[FsToolName, ...] = (
+    "ls",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete",
+    "glob",
+    "grep",
+    "execute",
+)
+_TODO_TOOL_NAMES = ("create_todo", "update_todo", "get_todo")
 
-    `agent_name` overrides the AGENT_NAME env var (used by the in-process timer
-    engine to run each scheduled task with the agent it was created for).
 
-    Uses a virtual filesystem backend: when the agent reads/writes files or executes commands,
-    ACP session/request_permission is triggered and must be approved by the frontend user.
-    """
-    # Resolve the real agent name FIRST: the WS flow calls this factory without
-    # an explicit agent_name and relies on the AGENT_NAME env var. Judging on
-    # the raw argument (e.g. None != "Chat") would wrongly route Chat sessions
-    # into the full workspace branch and leak all default skills/todo tools.
-    resolved = (agent_name or os.getenv("AGENT_NAME", "") or "default").strip() or "default"
-    web_search_enabled = os.getenv("WEB_SEARCH", "").strip() == "1"
-    agent_tools = get_agent_mcp_tools(resolved)
+def _agent_tool_policy(
+    agent_config: dict[str, Any],
+    agent_name: str,
+) -> tuple[list[FsToolName] | Literal["all"], list[StructuredTool], frozenset[str]]:
+    tools_config = agent_config.get("tools")
+    if tools_config is None:
+        return "all", _todo_tools(), frozenset()
+    if not isinstance(tools_config, dict):
+        raise ValueError(f"Agent '{agent_name}' has an invalid tools configuration")
 
-    if resolved == "Chat":
-        # Chat-only agent: no MCP tools / subagents / skills — a lightweight
-        # conversational model with no local file or shell access.
-        chat_backend = StateBackend()
-        chat_tools = _web_search_tools() if web_search_enabled else []  
-        chat_system_prompt = build_system_prompt(
-            "Chat",
-            role_name=os.getenv("ROLE_NAME", ""),
-            web_search=web_search_enabled,
-        )
+    inner_tools = tools_config.get("inner_tools")
+    if inner_tools is None:
+        inner_tools = []
+    if not isinstance(inner_tools, list):
+        raise ValueError(f"Agent '{agent_name}' has an invalid inner_tools list")
+    configured = {name for name in inner_tools if isinstance(name, str)}
+    supported = set(_FILESYSTEM_TOOL_NAMES) | set(_TODO_TOOL_NAMES) | {"task", "todo"}
+    unknown = configured - supported
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"Agent '{agent_name}' has unsupported built-in tools: {names}")
 
-        agent = create_deep_agent(
-            model=create_model(),
-            tools=chat_tools,
-            subagents=None,
-            skills=[],
-            checkpointer=checkpointer,
-            backend=chat_backend,
-            system_prompt=chat_system_prompt,  
-            middleware=[  
-                _ToolExclusionMiddleware(excluded=frozenset({  
-                    "ls", "read_file", "write_file", "edit_file",  
-                    "delete", "glob", "grep", "execute", "task",  
-                })),  
-            ],  
-        )
-        return agent
+    filesystem_tools = [name for name in _FILESYSTEM_TOOL_NAMES if name in configured]
+    if "read_file" not in filesystem_tools:
+        filesystem_tools.append("read_file")
 
-    agent_name = resolved
-    agent_root_dir = getattr(context, "cwd", None) or "."
+    selected_todos = (
+        set(_TODO_TOOL_NAMES)
+        if "todo" in configured
+        else configured.intersection(_TODO_TOOL_NAMES)
+    )
+    todo_tool_by_name = {tool.name: tool for tool in _todo_tools()}
+    todo_tools = [todo_tool_by_name[name] for name in _TODO_TOOL_NAMES if name in selected_todos]
 
+    excluded = set(_FILESYSTEM_TOOL_NAMES) - configured
+    excluded.update(set(_TODO_TOOL_NAMES) - selected_todos)
+    if "task" not in configured:
+        excluded.add("task")
+    return filesystem_tools, todo_tools, frozenset(excluded)
+
+
+def _agent_config_name(agent_name: str, agents: dict[str, dict[str, Any]]) -> str:
+    return next(
+        (name for name in agents if name.casefold() == agent_name.casefold()),
+        agent_name,
+    )
+
+
+_WEB_SEARCH_TOOL_NAME = "mcp_browser_server_search_web"
+
+
+def _configure_web_search_tool(requested: bool, agent_tools: list[BaseTool]) -> list[BaseTool]:
+    search_tool = next(
+        (tool for tool in agent_tools if tool.name == _WEB_SEARCH_TOOL_NAME),
+        None,
+    )
+    tools = [tool for tool in agent_tools if tool.name != _WEB_SEARCH_TOOL_NAME]
+    if requested:
+        tools.append(search_tool or get_mcp_tool("browser_server", "search_web"))
+    return tools
+
+
+def _create_agent_backend(root_dir: str) -> CompositeBackend:
     ephemeral_backend = StateBackend()
-    backend = CompositeBackend(
-        # LocalShellBackend = file operations (inherits FilesystemBackend) + execute (shell commands)
-        # virtual_mode=True maps virtual paths such as /uploads/example.txt to files under root_dir.
-        # Shell commands still run in root_dir and are unrestricted by this filesystem mapping.
-        # inherit_env=True: inherit the parent process environment (PATH/USERPROFILE, etc.); otherwise the child process
-        #   has an empty environment and cannot even find powershell/whoami.
-        # Windows uses PowerShellBackend: default shell=True actually runs cmd.exe, so
-        #   PowerShell syntax fails immediately; switching to explicit powershell.exe lets
-        #   the model execute PowerShell syntax directly.
+    return CompositeBackend(
         default=(PowerShellBackend if sys.platform == "win32" else LocalShellBackend)(
-            root_dir=agent_root_dir,
-            # virtual_mode=False: absolute paths (C:\, D:\, user home) are
-            # passed through as-is so the built-in read_file/write_file/glob/
-            # grep tools can access global Windows locations. Relative paths
-            # still resolve under root_dir, so /uploads/... attachments keep
-            # working. execute is unaffected (shell was never sandboxed).
+            root_dir=root_dir,
             virtual_mode=False,
             inherit_env=True,
             timeout=600,
@@ -547,62 +556,172 @@ def build_agent(
             "/conversation_history/": ephemeral_backend,
         },
     )
-    # Build subagents from the Agent document's subagent references.
-    subagents: list[SubAgent] = []
-    for sa_cfg in get_agent_subagents_config(agent_name):
-        sa_name = sa_cfg.get("name")
-        if not sa_name:
-            continue
-        sa: SubAgent = {
-            "name": sa_name,
-            "description": sa_cfg.get("description", ""),
-        }
-        sa_tools = get_agent_mcp_tools(sa_name)
-        if sa_tools:
-            sa["tools"] = sa_tools
-        if sa_cfg.get("skills"):
-            sa["skills"] = sa_cfg["skills"]
-        if sa_cfg.get("system_prompt"):
-            sa["system_prompt"] = sa_cfg["system_prompt"]
-        subagents.append(sa)
 
-    agent = create_deep_agent(
-        model=create_model(),
-        # MCP tools configured in the selected Agent document;
-        # each tool is a langchain StructuredTool backed by a fastmcp stdio client.
-        # Todo tools (create_todo/update_todo/get_todo) are appended as builtin
-        # task-step checklist tools (state in db/todos/).
-        tools=[*agent_tools, *_todo_tools()],
-        subagents=subagents or None,
-        # Skills enabled for the selected Agent document (the
-        # default agent starts with every installed skill).
-        skills=get_agent_skills(agent_name),
-        # persistent checkpointer (AsyncSqliteSaver): session state saved to agent_state.sqlite,
-        # paired with AgentServerACP(load_sessions=True) for session/load history continuation.
-        checkpointer=checkpointer,
-        backend=backend,
-        # The sandbox is off (virtual_mode=False): built-in file tools operate
-        # on the real Windows filesystem. Tell the model its actual working
-        # directory so ls/read_file/glob resolve relative paths correctly
-        # instead of guessing a drive root.
-        system_prompt=build_system_prompt(
-            agent_name,
-            role_name=os.getenv("ROLE_NAME", ""),
-            web_search=web_search_enabled,
-        ),
-        # Trigger HITL interrupt before risky tool calls -> deepagents_acp converts it to ACP
-        # session/request_permission -> frontend shows permission prompt (allow / deny / always allow)
-        # Any tool names can be configured: ls/read_file/glob/grep/delete/task/MCP tool, etc.
-        interrupt_on={
-            "execute": False,     # shell commands (remember "always allow" by command type)
-            # "write_file": True,  # write files
-            # "edit_file": True,   # edit files
-            "delete": True,      # delete files
-        },
+
+def _agent_tool_components(
+    agent_config: dict[str, Any],
+    config_name: str,
+    web_search_requested: bool,
+) -> tuple[
+    list[FsToolName] | Literal["all"],
+    list[BaseTool],
+    list[StructuredTool],
+    frozenset[str],
+]:
+    filesystem_tools, todo_tools, excluded_tools = _agent_tool_policy(agent_config, config_name)
+    agent_tools = _configure_web_search_tool(
+        web_search_requested,
+        get_agent_mcp_tools(config_name),
+    )
+    return filesystem_tools, agent_tools, todo_tools, excluded_tools
+
+
+def _task_tool_metadata(subagents: list[SubAgent]) -> StructuredTool:
+    # Build only the prompt-visible schema; context inspection should not compile child graphs.
+    available_agents = "\n".join(
+        _describe_subagent_for_tool(
+            spec["name"],
+            spec["description"],
+            forked=_is_forked_subagent(spec),
+        )
+        for spec in subagents
+    )
+    description = TASK_TOOL_DESCRIPTION.format(available_agents=available_agents)
+
+    def metadata_only(description: str, subagent_type: str) -> str:
+        del description, subagent_type
+        raise RuntimeError("Context tool inventory metadata cannot be invoked")
+
+    return StructuredTool.from_function(
+        func=metadata_only,
+        name="task",
+        description=description,
+        infer_schema=False,
+        args_schema=TaskToolSchema,
     )
 
 
-    return agent
+def get_agent_tool_inventory(
+    agent_name: str,
+    web_search: bool = False,
+    root_dir: str = ".",
+) -> list[tuple[BaseTool, str]]:
+    """Return the tools exposed to the main model with their source labels."""
+    agents = load_agents_config()
+    config_name = _agent_config_name(agent_name, agents)
+    agent_config = agents.get(config_name) or {}
+    backend = _create_agent_backend(root_dir)
+    filesystem_tools, agent_tools, todo_tools, excluded_tools = _agent_tool_components(
+        agent_config,
+        config_name,
+        web_search,
+    )
+    filesystem_middleware = _OverrideFilesystemMiddleware(backend=backend, tools=filesystem_tools)
+
+    subagent_specs: list[SubAgent] = [
+        {"name": spec["name"], "description": spec.get("description", "")}
+        for spec in get_agent_subagents_config(config_name)
+        if spec.get("name")
+    ]
+    general_purpose = _deepagents_graph.GENERAL_PURPOSE_SUBAGENT
+    if not any(spec["name"] == general_purpose["name"] for spec in subagent_specs):
+        subagent_specs.append({
+            "name": general_purpose["name"],
+            "description": general_purpose["description"],
+        })
+    task_tool = _task_tool_metadata(subagent_specs)
+
+    tools = [
+        *((tool, "builtin") for tool in filesystem_middleware.tools),
+        *((tool, "mcp") for tool in agent_tools),
+        *((tool, "builtin") for tool in todo_tools),
+        (task_tool, "subagent"),
+    ]
+    return [(tool, source) for tool, source in tools if tool.name not in excluded_tools]
+
+
+def build_agent(
+    context: AgentSessionContext, checkpointer=None, agent_name: str | None = None
+) -> CompiledStateGraph:
+    """Agent factory: build a DeepAgent from the session context (each session has independent state and working directory).
+
+    `agent_name` overrides the AGENT_NAME env var (used by the in-process timer
+    engine to run each scheduled task with the agent it was created for).
+    Agent capabilities are selected from that Agent's YAML frontmatter.
+    """
+    resolved = (agent_name or os.getenv("AGENT_NAME", "") or "default").strip() or "default"
+    agents = load_agents_config()
+    config_name = _agent_config_name(resolved, agents)
+    agent_config = agents.get(config_name) or {}
+    web_search_requested = os.getenv("WEB_SEARCH", "").strip() == "1"
+    agent_root_dir = getattr(context, "cwd", None) or "."
+    backend = _create_agent_backend(agent_root_dir)
+    filesystem_tools, agent_tools, todo_tools, excluded_tools = _agent_tool_components(
+        agent_config,
+        config_name,
+        web_search_requested,
+    )
+    web_search_enabled = web_search_requested
+
+    subagents: list[SubAgent] = []
+    for subagent_config in get_agent_subagents_config(config_name):
+        subagent_name = subagent_config.get("name")
+        if not subagent_name:
+            continue
+        subagent_config_name = _agent_config_name(subagent_name, agents)
+        child_config = agents.get(subagent_config_name) or {}
+        child_filesystem_tools = filesystem_tools
+        child_todo_tools = todo_tools
+        child_excluded_tools = excluded_tools
+        child_tools_configured = child_config.get("tools") is not None
+        if child_tools_configured:
+            child_filesystem_tools, child_todo_tools, child_excluded_tools = _agent_tool_policy(
+                child_config,
+                subagent_config_name,
+            )
+
+        subagent: SubAgent = {
+            "name": subagent_name,
+            "description": subagent_config.get("description", ""),
+            "middleware": [
+                _OverrideFilesystemMiddleware(
+                    backend=backend,
+                    tools=child_filesystem_tools,
+                ),
+                _ToolExclusionMiddleware(excluded=child_excluded_tools),
+            ],
+        }
+        if child_tools_configured:
+            subagent["tools"] = [
+                *get_agent_mcp_tools(subagent_config_name),
+                *child_todo_tools,
+            ]
+        child_system_prompt = (subagent_config.get("system_prompt") or "").strip()
+        child_skills_prompt = _agent_skills_prompt(subagent_config_name)
+        if child_system_prompt:
+            child_system_prompt += "\n\n"
+        subagent["system_prompt"] = (
+            f"{child_system_prompt}# Available Skills\n{child_skills_prompt}"
+        )
+        subagents.append(subagent)
+
+    return create_deep_agent(
+        model=create_model(),
+        tools=[*agent_tools, *todo_tools],
+        subagents=subagents or None,
+        checkpointer=checkpointer,
+        backend=backend,
+        system_prompt=build_system_prompt(
+            resolved,
+            role_name=os.getenv("ROLE_NAME", ""),
+            web_search=web_search_enabled,
+        ),
+        middleware=[
+            _OverrideFilesystemMiddleware(backend=backend, tools=filesystem_tools),
+            _ToolExclusionMiddleware(excluded=excluded_tools),
+        ],
+        interrupt_on={"execute": False, "delete": True},
+    )
 
 
 class CompactingAgentServer(AgentServerACP):

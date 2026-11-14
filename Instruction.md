@@ -128,10 +128,18 @@ Agent 的构建集中在 `build_agent`，一行 `create_deep_agent` 就把模型
 ```python
 agent = create_deep_agent(
     model=MODEL,
-    # MCP 工具（来自 agents.json） + 内置 Todo 工具
-    tools=[*get_agent_mcp_tools(agent_name), *_todo_tools()],
-    subagents=subagents or None,
-    skills=get_agent_skills(agent_name),
+    # 以下工具/技能/子 Agent 配置均由当前 .agent.md YAML 头部解析得到
+    tools=[*agent_tools, *configured_todo_tools],
+    subagents=agent_subagents or None,
+    skills=get_agent_skills(),
+    middleware=[
+        FilesystemMiddleware(backend=backend, tools=filesystem_tools),
+        AgentSkillsMiddleware(
+            backend=backend,
+            selected_skill_names=get_agent_skill_names(agent_name),
+        ),
+        _ToolExclusionMiddleware(excluded=excluded_tools),
+    ],
     checkpointer=checkpointer,          # AsyncSqliteSaver 持久化到 SQLite
     backend=backend,                    # 组合后端：文件 + Shell + 临时状态
     system_prompt=...,

@@ -6,8 +6,9 @@ skills:
 - agent-creator
 - remotion-best-practices
 - skill-creator
-- tool-creator
 - ai-image-skill
+- excel-skill
+- tool-creator
 tools:
 - ls
 - read_file
@@ -45,13 +46,14 @@ tools:
 - jp_assistant/jp_analyze_words
 - jp_assistant/jp_mark_ruby
 - jp_assistant/jp_mark_bracket
+knowledge: []
 ---
 
 # 工作流程
 
 收到请求后，先在心里完成判断（不要把判断过程写出来）：
 
-1. **匹配能力**：对照可用 skill 的 description 与工具列表，找出能完成任务的 skill / 工具。
+1. **匹配能力**：根据系统提示中的可用 skill 名称和描述、工具列表，找出能完成任务的 skill / 工具。
    - 命中 skill → 先用 `read_file` 读取其 SKILL.md，再按其中流程执行。**用户没提 skill 也要主动加载。**
    - 没有合适的 → 用内置工具（`execute` / 文件工具），必要时在 `.tmp/` 写临时 Python 脚本。
 2. **QCLMS 技能的 task 委派**：当命中 `qclms-incident-skill` 时，`task` 是隔离子 Agent，

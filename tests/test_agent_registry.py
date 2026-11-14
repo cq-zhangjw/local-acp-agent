@@ -134,6 +134,43 @@ class AgentRegistryTests(unittest.TestCase):
 
 
 class McpReferenceResolutionTests(unittest.TestCase):
+    def test_standalone_tool_load_does_not_require_agent_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            server_dir = root / "browser_server"
+            server_dir.mkdir()
+            (server_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "tools": [
+                            {
+                                "name": "search_web",
+                                "description": "Search the web",
+                                "inputSchema": {"type": "object"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            holder = object()
+            with (
+                patch.object(mcp_loader, "MCP_SERVERS_DIR", root),
+                patch.object(mcp_loader, "_holder", return_value=holder),
+                patch.object(mcp_loader, "make_tool", return_value="search tool") as make_tool,
+            ):
+                result = mcp_loader.get_mcp_tool("browser_server", "search_web")
+
+        self.assertEqual(result, "search tool")
+        make_tool.assert_called_once_with(
+            holder,
+            {
+                "name": "search_web",
+                "description": "Search the web",
+                "inputSchema": {"type": "object"},
+            },
+        )
+
     def test_selected_tool_name_resolves_metadata_from_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -299,6 +299,27 @@ def _service_reachable(server: str) -> bool:
         return False
 
 
+def get_mcp_tool(server: str, tool_name: str) -> BaseTool:
+    """Load one MCP tool without requiring it to be listed in an Agent config."""
+    if not _service_reachable(server):
+        raise RuntimeError(f"MCP server '{server}' is unavailable")
+
+    holder = _holder(server)
+    manifest_path = MCP_SERVERS_DIR / server / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tool_meta = next(
+        (
+            meta
+            for meta in manifest.get("tools") or []
+            if isinstance(meta, dict) and meta.get("name") == tool_name
+        ),
+        None,
+    )
+    if tool_meta is None:
+        raise LookupError(f"MCP tool '{server}/{tool_name}' not found in manifest")
+    return make_tool(holder, tool_meta)
+
+
 def get_agent_mcp_tools(agent_name: str) -> list[BaseTool]:
     """Return the enabled MCP tools configured for the given agent.
 

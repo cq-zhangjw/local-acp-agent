@@ -345,7 +345,7 @@ POST   /api/context/{session_id}/compact             # 手动压缩（改造现�
 |---|---|---|
 | 0 | 新建 `utils/session_context.py`（get/save/init/update/delete/rollback）+ 单测 | 增删改读回验证；无记录返回 None |
 | 1 | `deepagents_acp/server.py` prefill 分支 + `acp_agent.py` 接线（读表→初始化→跑→写回→取消不写） | 连续多轮对话：表内容与 checkpoint 一致；取消后重发不拼接；重试回滚生效 |
-| 2 | 压缩迁移（`compact_messages_list` 纯函数 + acp_agent 调用 + `api/context.py` 改造） | 85% 阈值触发自动压缩；压缩后表内容为压缩结果；usage 显示与表一致 |
+| 2 | 压缩迁移（`compact_messages_list` 纯函数 + acp_agent 调用 + `api/context.py` 改造） | 按配置比例及 overhead 触发自动压缩；压缩后表内容为压缩结果；usage 与上下文预览均显示消息 + overhead 用量 |
 | 3 | 二期 API（读/编辑/删除/回滚/压缩接口） | API 冒烟测试 |
 | 4 | 文档同步（README / DESIGN / 本文件更新）+ 全链路回归 | 功能与文档一致 |
 

@@ -79,9 +79,9 @@ Agent 通过 `run_agent` 以 stdio ACP 服务模式运行，协议编解码、�
 
 `build_agent` 选择 `CompositeBackend`：
 
-- 默认后端为 `PowerShellBackend`（Windows）/ `LocalShellBackend`（其他平台），根目录取 ACP 会话的 `cwd`，并以 `virtual_mode=True`、`inherit_env=True` 运行。文件工具中的 `/uploads/example.txt` 映射到项目根下的 `uploads/example.txt`；Shell 仍以根目录为工作目录执行。
+- 所有 Agent（包括 Chat）共用 `PowerShellBackend`（Windows）/ `LocalShellBackend`（其他平台），根目录取 ACP 会话的 `cwd`，并以 `virtual_mode=False`、`inherit_env=True` 运行；工具权限按各自 Agent frontmatter 过滤。
 - `/memories/` 和 `/conversation_history/` 路由到内存态 `StateBackend`，不写入本地文件系统。
-- **工具与技能装配（agents.json 驱动）**：`build_agent` 通过 `utils/mcp_loader.py`（`get_agent_mcp_tools` / `get_agent_subagents_config`）与 `utils/skill_loader.py`（`get_agent_skills`）按当前 Agent 从 `.deepagents/agents/agents.json` 装配：`tools.inner_tools` 决定启用哪些内置工具，`tools.mcp_tools` 注入所选 MCP 服务器工具（stdio 启动，工具名格式 `mcp_<server>_<tool>`，MCP 子进程以 UTF-8 重定向启动），`skills` 决定注入哪些技能（per-agent 启用集目录 `.deepagents/skills/.enabled/<agent>/` 物化 SKILL.md 硬链接）。`subagents` 递归装配子 Agent。
+- **工具与技能装配**：Chat 和 task 共用一个 `build_agent` 构造流程；每次按当前 `.agent.md` YAML frontmatter 装配 `tools.inner_tools`、`tools.mcp_tools`、`skills` 与 `subagents`。内置文件工具采用 allowlist，Todo/任务工具只在 YAML 声明时开放；MCP 工具按选中的服务器和工具注入。技能由 `AgentSkillsMiddleware` 在共享目录中过滤，不再物化 `.enabled` 目录；子 Agent 也按各自 Agent 文件装配。
 - `delete` 配置到 `interrupt_on`，删除前必须由客户端对权限请求作答；`execute` 为 `False`（shell 命令按命令类型默认放行），`write_file`/`edit_file` 未启用审批。
 - 图片作为 ACP `image` 内容块直接传给模型，Agent 应直接分析，不调用文件读取工具；其他附件使用 `/uploads/...` 虚拟路径并由文件工具读取。
 
