@@ -516,6 +516,7 @@ def build_agent(
                 })),  
             ],  
         )
+        return agent
 
     agent_name = resolved
     agent_root_dir = getattr(context, "cwd", None) or "."
